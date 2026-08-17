@@ -221,7 +221,8 @@ class WebObserver:
                 if not visible:
                     continue
 
-                elem_type = _map_type(tag, role)
+                input_type = (handle.get_attribute("type") or "") if tag == "input" else ""
+                elem_type = _map_type(tag, role, input_type)
 
                 elements.append({
                     "element_id":   f"web_{i}",
@@ -251,25 +252,53 @@ class WebObserver:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _map_type(tag: str, role: str) -> str:
+def _map_type(tag: str, role: str, input_type: str = "") -> str:
+    """Map a DOM tag/role onto the canonical vocabulary in observers/schema.py.
+
+    These names are not cosmetic. The agent filters elements by `type`, and
+    schema.CONTROL_TYPES is the only vocabulary it recognises - so emitting
+    "input" where the contract says "editcontrol" does not degrade perception,
+    it removes it: every element is silently dropped and the agent sees a blank
+    page. That is the exact failure schema.py's own docstring warns about, and
+    validate_state() flags it.
+
+    `input_type` is the <input type="..."> attribute. Without it a checkbox and
+    a text box both arrive as a tag of "input", and the agent would try to type
+    into a checkbox.
+    """
+    _INPUT_TYPE_MAP = {
+        "checkbox":  "checkboxcontrol",
+        "radio":     "radiobuttoncontrol",
+        "button":    "buttoncontrol",
+        "submit":    "buttoncontrol",
+        "reset":     "buttoncontrol",
+        "image":     "buttoncontrol",
+        "range":     "slidercontrol",
+        "number":    "editcontrol",
+    }
     _TAG_MAP = {
-        "input":    "input",
-        "textarea": "input",
-        "select":   "combobox",
-        "button":   "button",
-        "a":        "link",
+        "input":    "editcontrol",
+        "textarea": "editcontrol",
+        "select":   "comboboxcontrol",
+        "button":   "buttoncontrol",
+        "a":        "hyperlinkcontrol",
     }
     _ROLE_MAP = {
-        "button":   "button",
-        "textbox":  "input",
-        "combobox": "combobox",
-        "checkbox": "checkbox",
-        "radio":    "radio",
-        "tab":      "tabitem",
-        "menuitem": "menuitem",
-        "link":     "link",
+        "button":   "buttoncontrol",
+        "textbox":  "editcontrol",
+        "combobox": "comboboxcontrol",
+        "checkbox": "checkboxcontrol",
+        "radio":    "radiobuttoncontrol",
+        "tab":      "tabitemcontrol",
+        "menuitem": "menuitemcontrol",
+        "link":     "hyperlinkcontrol",
     }
-    return _TAG_MAP.get(tag) or _ROLE_MAP.get(role, "custom")
+
+    if tag == "input" and input_type:
+        mapped = _INPUT_TYPE_MAP.get(input_type.lower())
+        if mapped:
+            return mapped
+    return _TAG_MAP.get(tag) or _ROLE_MAP.get(role, "customcontrol")
 
 
 def _empty_state() -> Dict[str, Any]:
