@@ -1,0 +1,237 @@
+/* Styling is held constant across every variant so the experiment isolates
+   structure and labelling. Do not fork this file per variant. */
+
+:root {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --border: #d6d9de;
+  --text: #1d2125;
+  --muted: #626f7e;
+  --accent: #2b5fa8;
+  --danger: #a83232;
+  --ok: #2c6e49;
+  --row-alt: #fafbfc;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 "Segoe UI", Arial, sans-serif;
+}
+
+main { max-width: 1220px; margin: 0 auto; }
+
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 15px; margin: 0 0 12px; font-weight: 600; }
+
+.subtitle { color: var(--muted); margin: 0 0 20px; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+/* ---- form controls ---- */
+
+label { font-weight: 600; margin-bottom: 4px; }
+
+input, select, textarea {
+  font: inherit;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #fff;
+  color: inherit;
+}
+
+textarea { min-height: 58px; resize: vertical; }
+
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.actions { display: flex; gap: 8px; align-items: center; }
+
+button {
+  font: inherit;
+  padding: 7px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+button.secondary { background: #fff; color: var(--text); border-color: var(--border); }
+
+.status { color: var(--muted); font-weight: normal; }
+.status.error { color: var(--danger); }
+.status.ok { color: var(--ok); }
+
+/* ---- toolbar above the sheet ---- */
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.toolbar h2 { margin: 0; }
+
+/* ---- roster table ---- */
+
+.table-scroll {
+  max-height: 560px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+table { width: 100%; border-collapse: collapse; }
+
+th, td {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #eceef1;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+td.num, th.num { text-align: right; }
+
+/* ---- editable sheet ----
+
+   Every column after Student Name holds an input. The inputs are chromeless
+   until hovered or focused, so a 50-row sheet reads as a grid of values rather
+   than as 250 stacked form controls. */
+
+.sheet th, .sheet td { border-right: 1px solid var(--border); }
+.sheet th:last-child, .sheet td:last-child { border-right: 0; }
+
+.sheet tbody tr:nth-child(even) { background: var(--row-alt); }
+.sheet tbody tr:hover { background: #f1f5fa; }
+
+/* Cells that hold an input give up their padding to it, so the whole cell is
+   a click target. */
+.sheet td { padding: 0; }
+.sheet td.fixed, .sheet td.pick, .sheet th { padding: 6px 8px; }
+.sheet td.fixed { padding-top: 8px; }
+.sheet td.fixed.num { color: var(--muted); }
+
+/* Format hint inside a column header. Not part of the header's name. */
+.hint { text-transform: none; letter-spacing: 0; font-weight: normal; opacity: 0.75; }
+
+.sheet td input, .sheet td select, .sheet td textarea {
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  padding: 6px 8px;
+  min-height: 31px;
+  color: inherit;
+}
+
+.sheet td textarea {
+  min-height: 31px;
+  height: 31px;
+  overflow: hidden;
+  resize: none;
+  white-space: pre;
+}
+
+.sheet td input:hover, .sheet td select:hover, .sheet td textarea:hover {
+  border-color: var(--border);
+  background: #fff;
+}
+
+.sheet td input:focus, .sheet td select:focus, .sheet td textarea:focus {
+  background: #fff;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Room to read a note while writing it; collapses again on blur. */
+.sheet td textarea:focus { height: 66px; white-space: pre-wrap; }
+
+.sheet input[type="checkbox"] {
+  width: auto;
+  min-height: 0;
+  padding: 0;
+  margin: 4px 0 0;
+}
+
+.sheet .pick { width: 34px; text-align: center; }
+.c-index { width: 56px; }
+.c-id { width: 108px; }
+.c-lrn { width: 150px; }
+.c-name { width: 200px; }
+.c-tiny { width: 68px; }
+.c-small { width: 104px; }
+.c-wide { width: 210px; }
+.c-widest { width: 260px; }
+
+/* A cell with no value yet. The hatch distinguishes "not encoded" from an
+   encoded empty string, which matters when reading results off the page. */
+td.blank {
+  background: repeating-linear-gradient(
+    45deg, transparent, transparent 6px, #eef0f2 6px, #eef0f2 12px);
+}
+
+/* Edited but not yet committed to the record. */
+tr.dirty > td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+/* Rejected by validation on the last save attempt. */
+td.invalid { background: #fbeaea; box-shadow: inset 0 0 0 1px var(--danger); }
+
+tr.just-saved td { background: #eaf3ec; }
+
+/* ---- legend ---- */
+
+.legend {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.legend .key { display: inline-flex; align-items: center; gap: 6px; }
+
+.legend .swatch {
+  width: 22px;
+  height: 13px;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+
+.legend .swatch.blank {
+  background: repeating-linear-gradient(
+    45deg, transparent, transparent 6px, #eef0f2 6px, #eef0f2 12px);
+}
+
+.legend .swatch.dirty { border-left: 3px solid var(--accent); }
+.legend .swatch.invalid { background: #fbeaea; border-color: var(--danger); }

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grade Encoding Portal - V0 Base</title>
+  <link rel="stylesheet" href="../shared/styles.css">
+</head>
+<body>
+<main>
+  <h1>Grade Encoding Portal</h1>
+  <p class="subtitle">Variant V0 - base. One row per student. Index, Student ID and
+     Student Name are predefined by the portal; every other column is an input.
+     Each input is named by its column header plus its row's student-name cell.</p>
+
+  <form id="grade-form" novalidate autocomplete="off">
+    <section class="panel">
+
+      <div class="toolbar">
+        <h2>Class Roster <span class="status" id="roster-count"></span></h2>
+        <div class="actions">
+          <button type="submit" id="submit-btn">Save All Rows</button>
+          <button type="button" class="secondary" id="revert-btn">Revert Unsaved</button>
+          <span class="status" id="form-status" role="status" aria-live="polite"></span>
+        </div>
+      </div>
+
+      <div class="table-scroll">
+        <table id="records-table" class="sheet" data-scale="0-100">
+          <thead>
+            <tr>
+              <th scope="col" class="pick">
+                <input type="checkbox" id="select-all" aria-label="Select all rows">
+              </th>
+
+              <th scope="col" class="num c-index" id="col-index"
+                  data-key="index">Index</th>
+
+              <th scope="col" class="c-id" id="col-student-id"
+                  data-key="student_id">Student ID</th>
+
+              <th scope="col" class="c-name" id="col-student-name"
+                  data-key="student_name">Student Name</th>
+
+              <th scope="col" class="c-wide" id="col-course"
+                  data-key="course" data-type="text" data-name="course" data-placeholder="BS Computer Science" data-maxlength="60">Course</th>
+
+              <th scope="col" class="c-tiny" id="col-year"
+                  data-key="year" data-type="number" data-label="Year"
+                  data-min="1" data-max="5" data-step="1" data-name="year" data-placeholder="1-5">Year <span class="hint">1-5</span></th>
+
+              <th scope="col" class="c-small" id="col-grade"
+                  data-key="grade" data-type="number" data-label="Grade"
+                  data-min="0" data-max="100" data-step="0.01"
+                  data-required data-name="grade" data-placeholder="0-100">Grade <span class="hint">0-100</span></th>
+
+              <th scope="col" class="c-small" id="col-remarks"
+                  data-key="remarks" data-type="select"
+                  data-options="Passed,Failed" data-name="remarks">Remarks</th>
+
+              <th scope="col" class="c-widest" id="col-recommendations"
+                  data-key="recommendations" data-type="textarea"
+                  data-label="Recommendations" data-name="recommendations" data-placeholder="Optional notes for the adviser" data-maxlength="200">Recommendations <span class="hint">optional</span></th>
+            </tr>
+          </thead>
+          <tbody id="records-body"></tbody>
+        </table>
+      </div>
+
+      <p class="legend">
+        <span class="key"><span class="swatch blank"></span> not yet encoded</span>
+        <span class="key"><span class="swatch dirty"></span> unsaved edit</span>
+        <span class="key"><span class="swatch invalid"></span> rejected on save</span>
+      </p>
+
+    </section>
+  </form>
+</main>
+
+<script src="../shared/roster.js"></script>
+<script src="../shared/portal.js"></script>
+</body>
+</html>
