@@ -71,11 +71,16 @@ class WebObserver:
 
     def __init__(
         self,
-        headless:    bool            = False,
-        browser_url: Optional[str]   = None,
+        headless:     bool          = False,
+        browser_url:  Optional[str] = None,
+        max_elements: int           = 1000,
     ):
-        self.headless    = headless
-        self.browser_url = browser_url
+        self.headless     = headless
+        self.browser_url  = browser_url
+        # A data-entry grid is routinely larger than a form: 50 rows x 5 inputs
+        # is 250 controls before any chrome. The old fixed cap of 200 silently
+        # hid everything past it.
+        self.max_elements = max_elements
         self._pw:      Any = None
         self._browser: Any = None
         self._page:    Any = None
@@ -197,7 +202,17 @@ class WebObserver:
         except Exception:
             return elements
 
-        for i, handle in enumerate(handles[:200]):  # cap at 200 elements
+        # Truncating silently is worse than truncating: a sheet-style page (the
+        # scope #2 grade portal is 50 rows x 5 inputs) loses its last rows with
+        # no sign, and the agent reports success having never seen them. Say so.
+        if len(handles) > self.max_elements:
+            logger.warning(
+                "WebObserver: page has %d interactive elements, capturing %d - "
+                "the rest are invisible to the agent. Raise max_elements.",
+                len(handles), self.max_elements,
+            )
+
+        for i, handle in enumerate(handles[:self.max_elements]):
             try:
                 box = handle.bounding_box()
                 if not box or box["width"] < 4 or box["height"] < 4:
