@@ -92,6 +92,15 @@ def parse_args():
              "Output goes to data/demos/human/. Use for training data collection."
     )
     parser.add_argument(
+        "--browser-url", dest="browser_url", default="http://localhost:9222",
+        help="CDP endpoint used when --type web. The browser must already be "
+             "running with --remote-debugging-port=9222."
+    )
+    parser.add_argument(
+        "--max-elements", dest="max_elements", type=int, default=1000,
+        help="Cap on elements captured per web snapshot (grade portal: 303)."
+    )
+    parser.add_argument(
         "--perception", default="auto", choices=["auto", "vision"],
         help="State source: 'auto' (Excel/UIA accessibility tree, default) or "
              "'vision' (screenshot + CV/OCR — records demos as the agent SEES them, "
@@ -105,7 +114,17 @@ def main():
 
     # ── BC demo mode ──────────────────────────────────────────────────────────
     if args.demo:
-        recorder = DemoRecorder(output_dir="data/demos/human", trace_type="form_filling")
+        # --type web asks for DOM state here too. Without it a browser demo is
+        # recorded through UIAutomation, which does not resolve aria-labelledby:
+        # every row of a column arrives under one name and the trace cannot say
+        # which row was being filled.
+        recorder = DemoRecorder(
+            output_dir="data/demos/human",
+            trace_type="form_filling",
+            perception="web" if args.trace_type == "web" else "uia",
+            browser_url=args.browser_url,
+            max_elements=args.max_elements,
+        )
         recorder.run()
         return
 
@@ -114,6 +133,8 @@ def main():
         trace_type=args.trace_type,
         application=args.app,
         perception=args.perception,
+        browser_url=args.browser_url,
+        max_elements=args.max_elements,
     )
 
     if args.duration:

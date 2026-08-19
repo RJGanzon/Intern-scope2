@@ -29,7 +29,7 @@ import sys
 import threading
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     from PIL import Image as _PILImage
@@ -85,6 +85,36 @@ except ImportError:
         _UIA_OBSERVER_AVAILABLE = True
     except ImportError:
         _UIA_OBSERVER_AVAILABLE = False
+
+def _cdp_reachable(browser_url: str, timeout: float = 2.0) -> bool:
+    """Is a browser listening on this CDP endpoint?
+
+    Asked over plain HTTP rather than by attaching, because the decision has to
+    be made on the constructing thread while the Playwright session belongs to
+    the capture thread. /json/version is CDP's cheapest endpoint and needs no
+    driver.
+    """
+    import json as _json
+    import urllib.request as _urlreq
+
+    try:
+        with _urlreq.urlopen(f"{browser_url.rstrip('/')}/json/version",
+                             timeout=timeout) as response:
+            _json.load(response)
+        return True
+    except Exception:
+        return False
+
+
+try:
+    from observers.web_observer import WebObserver as _WebObserver
+    _WEB_OBSERVER_AVAILABLE = True
+except ImportError:
+    try:
+        from components.observers.web_observer import WebObserver as _WebObserver
+        _WEB_OBSERVER_AVAILABLE = True
+    except ImportError:
+        _WEB_OBSERVER_AVAILABLE = False
 
 try:
     from observers.vlm.vision_observer.cv_vision_observer import CVVisionObserver as _CVVisionObserver
@@ -415,15 +445,26 @@ class ScreenObserver:
 
     Args:
         output_dir:   Where trace JSONs are saved (created if needed).
-        trace_type:   "web" | "excel" | "gui"  (written into every trace).
+        trace_type:   "web" | "excel" | "gui"  (written into every trace, and
+                      selects the observer: "web" attaches to a browser over
+                      CDP, "excel" uses COM, anything else uses UIAutomation).
         application:  Optional app-name tag passed to TraceTranslator.
         monitor:      mss monitor index (1 = primary screen).
+        browser_url:  CDP endpoint for trace_type="web". The browser must
+                      already be running with --remote-debugging-port.
+        max_elements: Cap on elements captured per web snapshot. The grade
+                      portal is 303, so the default 200 of older builds
+                      silently truncated it.
 
     Usage:
         observer = ScreenObserver(output_dir="data/output/traces/live")
         observer.start(interval_sec=1.0)
         # ... interact with your screen ...
         traces = observer.stop()        # blocks briefly while translating
+
+    Recording a browser demo:
+        chrome.exe --remote-debugging-port=9222
+        observer = ScreenObserver(trace_type="web")   # attaches to that Chrome
     """
 
     def __init__(
@@ -434,6 +475,8 @@ class ScreenObserver:
         monitor: int = 1,
         continual_learner: Optional[Any] = None,
         perception: str = "auto",
+        browser_url: str = "http://localhost:9222",
+        max_elements: int = 1000,
     ):
         if not _MSS_AVAILABLE:
             raise ImportError(
@@ -468,9 +511,48 @@ class ScreenObserver:
             self._vision_observer = _CVVisionObserver()   # image set per frame
             print("[ScreenObserver] VISION perception active — recording demos from pixels (CV+OCR).")
 
-        # Priority 1: ExcelObserver (semantic COM state) when trace_type="excel"
+        # Priority 1: WebObserver (DOM state) when trace_type="web".
+        #
+        # Without this a browser demo is recorded through UIAutomation, which
+        # sees Chrome's accessibility tree rather than the DOM. On a sheet-style
+        # page that loses the one thing the trace needs: UIA does not resolve
+        # aria-labelledby, so all fifty rows of a column arrive under one name
+        # and the trace cannot say which row the human was filling. The demo
+        # looks fine and trains a model that cannot tell rows apart.
+        #
+        # This attaches over CDP to a browser the human is already driving, so
+        # it needs one started with --remote-debugging-port=9222. Attaching (not
+        # launching) is the point: the demonstration has to happen in the
+        # operator's own browser.
+        # The Playwright session is created by the capture thread, not here.
+        # Playwright's sync API is thread-affine: a session built on this thread
+        # and used from the capture thread raises greenlet "cannot switch to a
+        # different thread", which snapshot() catches and turns into an empty
+        # state - so every frame records zero elements while the recorder still
+        # prints "Semantic mode (web)" and saves perfectly well-formed, empty
+        # traces. Whether a browser is *there* is decided now, over plain HTTP,
+        # so the fallback to UIA can still be chosen before recording starts.
+        self._web_observer: Optional[Any] = None
+        self._web_wanted:   bool          = False
+        self._browser_url                 = browser_url
+        self._max_elements                = max_elements
+        if self._vision_observer is None and trace_type == "web":
+            if not _WEB_OBSERVER_AVAILABLE:
+                print("[ScreenObserver] trace_type='web' but WebObserver is unavailable "
+                      "(pip install playwright) — falling back to UIAutomation.")
+            elif not _cdp_reachable(browser_url):
+                print(f"[ScreenObserver] No browser answering at {browser_url}. "
+                      "Start Chrome with --remote-debugging-port=9222, or recording "
+                      "will fall back to UIAutomation and lose per-row labels.")
+            else:
+                self._web_wanted = True
+                print(f"[ScreenObserver] WebObserver will attach at {browser_url} — "
+                      "DOM state active (aria-labelledby resolved).")
+
+        # Priority 2: ExcelObserver (semantic COM state) when trace_type="excel"
         self._excel_observer: Optional[Any] = None
-        if self._vision_observer is None and trace_type == "excel" and _EXCEL_OBSERVER_AVAILABLE:
+        if (self._vision_observer is None and not self._web_wanted
+                and trace_type == "excel" and _EXCEL_OBSERVER_AVAILABLE):
             self._excel_observer = _ExcelObserver()
             if self._excel_observer.connect():
                 print("[ScreenObserver] ExcelObserver connected — Excel semantic mode active.")
@@ -478,10 +560,10 @@ class ScreenObserver:
                 print("[ScreenObserver] ExcelObserver could not connect — trying UIAutomation.")
                 self._excel_observer = None
 
-        # Priority 2: UIAutomationObserver — works for all apps, no OCR needed
+        # Priority 3: UIAutomationObserver — works for all apps, no OCR needed
         self._uia_observer: Optional[Any] = None
         if (self._vision_observer is None and self._excel_observer is None
-                and _UIA_OBSERVER_AVAILABLE):
+                and not self._web_wanted and _UIA_OBSERVER_AVAILABLE):
             obs = _UIAObserver()
             if obs.available:
                 self._uia_observer = obs
@@ -489,8 +571,9 @@ class ScreenObserver:
             else:
                 print("[ScreenObserver] UIAutomation unavailable — falling back to OCR.")
 
-        # Priority 3: OCR via TraceTranslator (fallback only)
-        if self._excel_observer is None and self._uia_observer is None:
+        # Priority 4: OCR via TraceTranslator (fallback only)
+        if (self._excel_observer is None and self._uia_observer is None
+                and not self._web_wanted):
             print("[ScreenObserver] Using OCR fallback (TraceTranslator).")
 
         self._continual_learner = continual_learner
@@ -534,6 +617,10 @@ class ScreenObserver:
 
         self.mouse.stop()
         self.keyboard.stop()
+
+        # No WebObserver teardown here: the capture thread created the session
+        # and tears it down itself, because disconnect() is as thread-affine as
+        # snapshot() is. The join above has already waited for that.
 
         mouse_actions      = self.mouse.get_actions()
         keyboard_actions   = self.keyboard.get_actions()
@@ -859,6 +946,31 @@ class ScreenObserver:
     # ── capture loop ──────────────────────────────────────────────────────────
 
     def _capture_loop(self):
+        # Own the browser session for the lifetime of this thread. Playwright's
+        # sync API cannot be handed across threads, so it is built here, used
+        # here, and released here.
+        if self._web_wanted:
+            obs = _WebObserver(browser_url=self._browser_url,
+                               max_elements=self._max_elements)
+            if obs.available and obs.connect():
+                self._web_observer = obs
+            else:
+                print(f"[ScreenObserver] WebObserver failed to attach at "
+                      f"{self._browser_url} — this recording has no DOM state.")
+        try:
+            self._capture_frames()
+        finally:
+            if self._web_observer is not None:
+                try:
+                    # Detaching over CDP leaves the operator's browser open -
+                    # they were driving it. But Playwright holds a node driver
+                    # subprocess, so the session itself must be released.
+                    self._web_observer.disconnect()
+                except Exception as exc:
+                    print(f"[ScreenObserver] WebObserver disconnect failed: {exc}")
+                self._web_observer = None
+
+    def _capture_frames(self):
         with mss.mss() as sct:
             monitor = sct.monitors[self.monitor_index]
             while not self._stop_event.is_set():
@@ -871,6 +983,12 @@ class ScreenObserver:
                     # → bboxes are absolute screen coords, matching mouse clicks).
                     self._vision_observer._image = img
                     semantic_state = self._vision_observer.snapshot()
+                    self._frames.append((ts, img, semantic_state))
+                elif self._web_observer is not None:
+                    # WebObserver emits screen-coordinate bboxes, the same space
+                    # as the recorded mouse clicks, so a click maps onto the DOM
+                    # element it actually landed on.
+                    semantic_state = self._web_observer.snapshot()
                     self._frames.append((ts, img, semantic_state))
                 elif self._excel_observer is not None:
                     semantic_state = self._excel_observer.snapshot()
@@ -1334,20 +1452,37 @@ class DemoRecorder:
     Format: identical to ScreenObserver + _export_run_traces output —
             train.py reads it without any changes.
 
+    Perception is swappable, the same way ScreenObserver's is. The default walks
+    the UIA tree, which is right for a desktop form and wrong for a browser: UIA
+    does not resolve aria-labelledby, so all fifty rows of a grid column arrive
+    under one name and the demo cannot say which row was filled. perception="web"
+    records DOM state instead, from a browser already running with
+    --remote-debugging-port. Anything else with a .snapshot() can be passed as
+    observer_factory — a factory, not an instance, because the worker thread has
+    to own it (see __init__).
+
     Usage:
         recorder = DemoRecorder()
         recorder.run()          # blocks until F10
+
+        DemoRecorder(perception="web").run()        # browser demo
     """
 
     _FLUSH_KEYS = {"Key.tab", "Key.enter", "Key.esc", "Key.escape",
                    "tab", "enter", "return", "escape", "esc"}
     _CAPTURE_DELAY = 0.30   # seconds to wait after action before snapshotting
 
-    def __init__(self, output_dir: str = "data/demos/human", trace_type: str = "form_filling"):
+    def __init__(
+        self,
+        output_dir: str = "data/demos/human",
+        trace_type: str = "form_filling",
+        observer_factory: Optional[Callable[[], Any]] = None,
+        perception: str = "uia",
+        browser_url: str = "http://localhost:9222",
+        max_elements: int = 1000,
+    ):
         if not _PYNPUT_AVAILABLE:
             raise ImportError("pynput is required. Install with: pip install pynput")
-        if not _UIA_OBSERVER_AVAILABLE:
-            raise ImportError("UIAutomationObserver not found in components/observers/.")
 
         from datetime import datetime as _dt
         _session_ts   = _dt.now().strftime("%Y%m%d_%H%M%S")
@@ -1355,12 +1490,53 @@ class DemoRecorder:
         self.output_dir = os.path.join(_intern_dir, output_dir, f"session_{_session_ts}")
         self.trace_type = trace_type
 
-        # Option A: only walk the foreground form + Notepad source window.
-        # ~10x faster snapshots than walking every visible window.
-        try:
-            self._observer = _UIAObserver(background_apps={"notepad", ".txt"})
-        except TypeError:
-            self._observer = _UIAObserver()  # older signature fallback
+        # ── which eye records the state ──────────────────────────────────────
+        # A factory, not an observer instance, because Playwright's sync API is
+        # thread-affine: a WebObserver built here and used from the worker
+        # thread raises greenlet "cannot switch to a different thread", which
+        # _request_snapshot catches and turns into {} — every step recorded with
+        # empty state while the recorder happily reports success. So an injected
+        # observer is always constructed BY the worker thread, the one thread
+        # that snapshots during a live recording.
+        #
+        # UIA keeps its original eager construction: it has been used across
+        # these threads all along (each calls _init_com), and moving it would
+        # change scope #1's recording path for no reason.
+        self._observer: Optional[Any] = None
+        self._observer_factory: Optional[Callable[[], Any]] = observer_factory
+
+        if observer_factory is None and perception == "web":
+            # Decided here, over plain HTTP, so the fallback is chosen BEFORE
+            # recording starts rather than discovered in the saved traces.
+            if not _WEB_OBSERVER_AVAILABLE:
+                print("[DemoRecorder] perception='web' but WebObserver is unavailable "
+                      "(pip install playwright) — falling back to UIAutomation.")
+            elif not _cdp_reachable(browser_url):
+                print(f"[DemoRecorder] No browser answering at {browser_url}. "
+                      "Start Chrome with --remote-debugging-port=9222, or recording "
+                      "will fall back to UIAutomation and lose per-row labels.")
+            else:
+                def _make_web_observer():
+                    obs = _WebObserver(browser_url=browser_url,
+                                       max_elements=max_elements)
+                    if not (obs.available and obs.connect()):
+                        raise RuntimeError(
+                            f"WebObserver failed to attach at {browser_url}")
+                    return obs
+                self._observer_factory = _make_web_observer
+                print(f"[DemoRecorder] WebObserver will attach at {browser_url} — "
+                      "DOM state active (aria-labelledby resolved).")
+
+        if self._observer_factory is None:
+            if not _UIA_OBSERVER_AVAILABLE:
+                raise ImportError("UIAutomationObserver not found in components/observers/.")
+            # Option A: only walk the foreground form + Notepad source window.
+            # ~10x faster snapshots than walking every visible window.
+            try:
+                self._observer = _UIAObserver(background_apps={"notepad", ".txt"})
+            except TypeError:
+                self._observer = _UIAObserver()  # older signature fallback
+
         self._steps: list = []
         self._lock   = threading.Lock()
 
@@ -1454,6 +1630,8 @@ class DemoRecorder:
         that blocks.
         """
         if not self._use_subprocess:
+            if self._observer is None:
+                return {}
             try:
                 return self._observer.snapshot()
             except Exception:
@@ -1598,6 +1776,15 @@ class DemoRecorder:
         progress       : optional callback(msg) for UI updates
         Returns total steps written.
         """
+        if self._observer_factory is not None:
+            # replay() snapshots from the calling thread, but an injected
+            # observer belongs to the worker thread (see __init__). Refusing is
+            # the honest outcome: the alternative is a full replay session whose
+            # every state is empty, saved as if it were real training data.
+            raise RuntimeError(
+                "replay() needs an observer it can use on this thread; the "
+                "injected one is owned by the recorder's worker thread. Replay "
+                "with the default UIA perception, or replay from a saved session.")
         import pyautogui, glob as _glob
         pyautogui.FAILSAFE = False
         src = source_session
@@ -2074,17 +2261,42 @@ class DemoRecorder:
         # taking that isolation away means this thread needs its own COM
         # init, same as every other thread in this file that touches UIA.
         self._init_com()
-        # initial baseline snapshot (on-demand)
-        self._last_state = self._request_snapshot() or {}
-        while not self._quit_event.is_set():
+        # An injected observer is built here, on the thread that will snapshot
+        # it — see __init__. Failing to build is loud: a recording with no
+        # observer produces well-formed files full of empty states, which is
+        # worse than no recording at all because it looks like data.
+        if self._observer_factory is not None:
             try:
-                event = self._action_queue.get(timeout=0.5)
-            except _queue.Empty:
-                continue
-            try:
-                self._process_event(event)
-            except Exception:
-                self._log_crash("worker._process_event")
+                self._observer = self._observer_factory()
+            except Exception as exc:
+                print(f"[DemoRecorder] observer unavailable — this recording would "
+                      f"have no state: {exc}")
+                self._quit_event.set()
+                return
+        try:
+            # initial baseline snapshot (on-demand)
+            self._last_state = self._request_snapshot() or {}
+            while not self._quit_event.is_set():
+                try:
+                    event = self._action_queue.get(timeout=0.5)
+                except _queue.Empty:
+                    continue
+                try:
+                    self._process_event(event)
+                except Exception:
+                    self._log_crash("worker._process_event")
+        finally:
+            # Only what this thread built. Detaching over CDP leaves the
+            # operator's own browser open — they were driving it — but the
+            # Playwright session holds a node subprocess that must be released.
+            if self._observer_factory is not None and self._observer is not None:
+                disconnect = getattr(self._observer, "disconnect", None)
+                if callable(disconnect):
+                    try:
+                        disconnect()
+                    except Exception as exc:
+                        print(f"[DemoRecorder] observer disconnect failed: {exc}")
+                self._observer = None
 
     def _process_event(self, event: dict):
         """pre = snapshot before this action (= prior action's post); take ONE

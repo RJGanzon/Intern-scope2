@@ -38,6 +38,23 @@ class ScopeConfig:
     # Multi-record source delimiter (moves to the DataSource, kept here for ref).
     record_delimiter: Optional[str] = None    # was "RECORD N OF M"
 
+    # Substrings (lowercase) identifying the task's OWN window, tested against a
+    # state's window_title / application. Used to tell demonstration clicks from
+    # clicks on the terminal, the recorder GUI, or the source document — see
+    # scripts/clean_demos.py, where this used to be a literal `"insurance" in t`
+    # that silently dropped every click of any other scope's recording.
+    # Empty (the generic default) → accept every window, since an unknown app
+    # has no marker to test and dropping everything is the worse failure.
+    window_markers: List[str] = field(default_factory=list)
+
+    def is_target_window(self, state: dict) -> bool:
+        """Does this observation come from the window being demonstrated?"""
+        if not self.window_markers:
+            return True
+        title = (state.get("window_title") or "").lower()
+        app   = (state.get("application")  or "").lower()
+        return any(m in title or m in app for m in self.window_markers)
+
 
 # ── Prebuilt scope: the car-insurance data-entry form (dev fixture) ───────────
 INSURANCE_SCOPE = ScopeConfig(
@@ -49,4 +66,16 @@ INSURANCE_SCOPE = ScopeConfig(
     section_pattern=r"section_(driver|vehicle)_(\d+)$",
     section_format=_default_section_format,
     record_delimiter="RECORD N OF M",
+    window_markers=["insurance", "data entry"],
+)
+
+
+# ── Prebuilt scope: the scope #2 grade portal (a web page, not a desktop app) ─
+# No tabs and no sections: the portal is one long table, so the tab/section
+# machinery correctly never fires. The markers match the mock portal's own
+# <title>, which WebObserver reports as window_title — every variant keeps
+# "Grade" there, including v2_relabeled, whose visible heading is renamed to
+# "Student Rating Sheet" precisely to break anything keyed on the heading.
+GRADE_PORTAL_SCOPE = ScopeConfig(
+    window_markers=["grade encoding portal", "grade portal", "student rating"],
 )

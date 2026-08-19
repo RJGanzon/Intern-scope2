@@ -13,12 +13,35 @@ Removes the noise that corrupts the recorded field order:
 
 Typing frames are KEPT — they fill the form, which is the navigation signal.
 
+Which window counts as "the form" comes from ScopeConfig.window_markers, not
+from a literal in this file. It was `"insurance" in title` until 2026-08-20,
+which meant any other scope's recording had every one of its clicks counted as
+junk — a scope #2 browser session cleaned down to typing frames only, with the
+navigation signal (the whole point of this script) silently gone.
+
 Usage:
     python scripts/clean_demos.py <src_dir> <dst_dir>
     python scripts/clean_demos.py data/demos/policy_nav data/demos/policy_clean
+    python scripts/clean_demos.py <src> <dst> --scope grade_portal
+    python scripts/clean_demos.py <src> <dst> --window-match "grade portal,roster"
 """
 from __future__ import annotations
 import sys, os, glob, json, shutil
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _p in (_ROOT, os.path.join(_ROOT, "components")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from agent.scope import GRADE_PORTAL_SCOPE, INSURANCE_SCOPE, ScopeConfig
+
+# Named on the command line as --scope <name>. Default stays "insurance" so
+# every existing scope #1 invocation cleans exactly as it did before.
+SCOPES = {
+    "insurance":    INSURANCE_SCOPE,
+    "grade_portal": GRADE_PORTAL_SCOPE,
+    "generic":      ScopeConfig(),      # no markers → every window accepted
+}
 
 FIELD = {"editcontrol", "input", "comboboxcontrol", "combobox",
          "checkboxcontrol", "checkbox", "buttoncontrol", "button"}
@@ -44,10 +67,9 @@ def elem_at(state, pos, role="active"):
     return best
 
 
-def is_form(st):
-    t = (st.get("window_title") or "").lower()
-    a = (st.get("application") or "").lower()
-    return "insurance" in t or "insurance" in a or "data entry" in t
+def is_form(st, scope=INSURANCE_SCOPE):
+    """Is this observation from the demonstrated window? Delegates to the scope."""
+    return scope.is_target_window(st or {})
 
 
 def n_listitems(st):
@@ -55,11 +77,32 @@ def n_listitems(st):
                if "listitem" in (e.get("type") or "").lower())
 
 
-def main():
-    if len(sys.argv) < 3:
-        print("usage: python scripts/clean_demos.py <src_dir> <dst_dir>")
-        return
-    src, dst = sys.argv[1], sys.argv[2]
+def parse_args(argv):
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("src")
+    ap.add_argument("dst")
+    ap.add_argument("--scope", default="insurance", choices=sorted(SCOPES),
+                    help="Which scope's window markers identify the demonstrated "
+                         "window (default: insurance).")
+    ap.add_argument("--window-match", default=None,
+                    help="Comma-separated title/app substrings, overriding --scope. "
+                         "Use for a one-off app with no ScopeConfig of its own.")
+    return ap.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    src, dst = args.src, args.dst
+
+    if args.window_match:
+        markers = [m.strip().lower() for m in args.window_match.split(",") if m.strip()]
+        scope = ScopeConfig(window_markers=markers)
+    else:
+        scope = SCOPES[args.scope]
+    print(f"window markers: {scope.window_markers or '(none — every window accepted)'}")
+
     if os.path.exists(dst):
         shutil.rmtree(dst)
     os.makedirs(dst, exist_ok=True)
@@ -80,7 +123,7 @@ def main():
 
             if m:
                 # must be on the form window
-                if not is_form(ns) and not is_form(st):
+                if not is_form(ns, scope) and not is_form(st, scope):
                     drop_junk += 1
                     continue
                 # DROPDOWN SELECTION: dropdown was open when this click happened →
