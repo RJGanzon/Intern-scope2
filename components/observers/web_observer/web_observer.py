@@ -74,9 +74,18 @@ class WebObserver:
         headless:     bool          = False,
         browser_url:  Optional[str] = None,
         max_elements: int           = 1000,
+        screen_coords: bool         = True,
     ):
         self.headless     = headless
         self.browser_url  = browser_url
+        # recorder.py documents the trace element schema as
+        # "bbox: [x1,y1,x2,y2] - screen coordinates", and ActionExecutor._click
+        # drives pyautogui in screen pixels. Playwright's bounding_box() is in
+        # viewport CSS pixels, so the two disagree by the window origin plus the
+        # browser chrome - a page that looks perfectly perceived produces clicks
+        # that land a few hundred pixels high. Off only for tests that compare
+        # against raw DOM geometry.
+        self.screen_coords = screen_coords
         # A data-entry grid is routinely larger than a form: 50 rows x 5 inputs
         # is 250 controls before any chrome. The old fixed cap of 200 silently
         # hid everything past it.
@@ -123,6 +132,13 @@ class WebObserver:
             return True
         except Exception as exc:
             logger.warning("WebObserver: connect failed — %s", exc)
+            # Release the driver before giving up. sync_playwright().start()
+            # installs an asyncio loop in this thread, and a failed attach used
+            # to leave it there: the *next* component to use Playwright - in a
+            # test run, every later browser test - then died with "Sync API
+            # inside the asyncio loop", pointing at code that had done nothing
+            # wrong. A caller that retries connect() also needs the slate clean.
+            self.disconnect()
             return False
 
     def disconnect(self):
@@ -169,14 +185,27 @@ class WebObserver:
         vp    = page.viewport_size or {"width": 1920, "height": 1080}
         W, H  = vp["width"], vp["height"]
 
-        elements = self._extract_elements(page, W, H)
+        # Screen geometry, so bboxes and screen_resolution describe the same
+        # space. The transformer normalises click_xy by screen_resolution, so
+        # reporting the viewport size here while emitting screen bboxes would
+        # scale every coordinate wrongly on top of offsetting it.
+        origin = self._screen_origin(page)
+        if origin:
+            W, H = origin["screen_width"], origin["screen_height"]
+
+        elements = self._extract_elements(page, W, H, origin)
+
+        # document.activeElement, now that one pass reads it for free. The
+        # agent's auto-skip and auto-fill both start from the focused element,
+        # so leaving this None made every web state look like nothing had focus.
+        focused = next((e["element_id"] for e in elements if e["focused"]), None)
 
         return {
             "application":        "browser",
             "window_title":       title,
             "process_id":         None,
             "screen_resolution":  [W, H],
-            "focused_element_id": None,
+            "focused_element_id": focused,
             "elements":           elements,
             "source":             "web",
             "web_context": {
@@ -185,7 +214,72 @@ class WebObserver:
             },
         }
 
-    def _extract_elements(self, page: Any, W: int, H: int) -> List[Dict[str, Any]]:
+    def _screen_origin(self, page: Any) -> Optional[Dict[str, float]]:
+        """Where the viewport's top-left sits on the physical screen.
+
+        `window.screenX/Y` is the browser window; the content box starts inside
+        the border and below the browser's own UI. The border is the leftover
+        outer width split between the two sides.
+
+        The vertical term is not simply `outerHeight - innerHeight`: a window
+        has a border along the bottom but none along the top, so that
+        difference is the UI *plus* one border. Measured against Chrome's
+        Chrome_RenderWidgetHostHWND (the OS window that is exactly the content
+        area) the naive formula sits 8 px low at every window position, 8 being
+        the border - hence the subtraction.
+
+        Everything the DOM reports is in CSS pixels, so a display running at a
+        scale factor needs devicePixelRatio applied to reach the pixels
+        pyautogui clicks.
+
+        Returns None when translation is off or unavailable, which leaves
+        viewport coordinates in place rather than emitting a half-applied
+        offset.
+        """
+        if not self.screen_coords:
+            return None
+        try:
+            geometry = page.evaluate(
+                """() => ({
+                    screenX: window.screenX, screenY: window.screenY,
+                    outerWidth: window.outerWidth, outerHeight: window.outerHeight,
+                    innerWidth: window.innerWidth, innerHeight: window.innerHeight,
+                    dpr: window.devicePixelRatio || 1,
+                    screenWidth: window.screen.width, screenHeight: window.screen.height,
+                })"""
+            )
+        except Exception as exc:
+            logger.warning("WebObserver: screen origin unavailable (%s) - "
+                           "bboxes stay in viewport coordinates.", exc)
+            return None
+
+        border = max(0.0, (geometry["outerWidth"] - geometry["innerWidth"]) / 2.0)
+        chrome = max(0.0, geometry["outerHeight"] - geometry["innerHeight"] - border)
+        dpr    = geometry["dpr"] or 1.0
+        return {
+            "dx":  (geometry["screenX"] + border) * dpr,
+            "dy":  (geometry["screenY"] + chrome) * dpr,
+            "dpr": dpr,
+            "screen_width":  int(geometry["screenWidth"] * dpr),
+            "screen_height": int(geometry["screenHeight"] * dpr),
+        }
+
+    @staticmethod
+    def _to_screen(box: Dict[str, float],
+                   origin: Optional[Dict[str, float]]) -> List[int]:
+        """A Playwright bounding box as a screen-coordinate bbox."""
+        if origin:
+            dpr, dx, dy = origin["dpr"], origin["dx"], origin["dy"]
+            x1 = box["x"] * dpr + dx
+            y1 = box["y"] * dpr + dy
+            return [int(x1), int(y1),
+                    int(x1 + box["width"] * dpr), int(y1 + box["height"] * dpr)]
+        return [int(box["x"]), int(box["y"]),
+                int(box["x"] + box["width"]), int(box["y"] + box["height"])]
+
+    def _extract_elements(self, page: Any, W: int, H: int,
+                          origin: Optional[Dict[str, float]] = None
+                          ) -> List[Dict[str, Any]]:
         """Extract interactive and labelled elements from the page DOM."""
         elements: List[Dict[str, Any]] = []
 
@@ -198,74 +292,111 @@ class WebObserver:
         )
 
         try:
-            handles = page.query_selector_all(selector)
-        except Exception:
+            raw = page.evaluate(_EXTRACT_JS, {"selector": selector,
+                                              "limit": self.max_elements})
+        except Exception as exc:
+            logger.warning("WebObserver: element extraction failed — %s", exc)
             return elements
 
         # Truncating silently is worse than truncating: a sheet-style page (the
         # scope #2 grade portal is 50 rows x 5 inputs) loses its last rows with
         # no sign, and the agent reports success having never seen them. Say so.
-        if len(handles) > self.max_elements:
+        if raw["total"] > self.max_elements:
             logger.warning(
                 "WebObserver: page has %d interactive elements, capturing %d - "
                 "the rest are invisible to the agent. Raise max_elements.",
-                len(handles), self.max_elements,
+                raw["total"], self.max_elements,
             )
 
-        for i, handle in enumerate(handles[:self.max_elements]):
-            try:
-                box = handle.bounding_box()
-                if not box or box["width"] < 4 or box["height"] < 4:
-                    continue
-
-                tag      = handle.evaluate("el => el.tagName.toLowerCase()")
-                role     = handle.get_attribute("role") or tag
-                name     = (
-                    handle.get_attribute("aria-label")
-                    or handle.get_attribute("placeholder")
-                    or handle.get_attribute("title")
-                    or handle.get_attribute("name")
-                    or handle.inner_text()
-                    or ""
-                ).strip()[:120]
-
-                value    = handle.input_value() if tag in ("input", "textarea", "select") else ""
-                enabled  = handle.is_enabled()
-                visible  = handle.is_visible()
-
-                if not visible:
-                    continue
-
-                input_type = (handle.get_attribute("type") or "") if tag == "input" else ""
-                elem_type = _map_type(tag, role, input_type)
-
-                elements.append({
-                    "element_id":   f"web_{i}",
-                    "type":         elem_type,
-                    "control_type": tag,
-                    "bbox":         [
-                        int(box["x"]), int(box["y"]),
-                        int(box["x"] + box["width"]),
-                        int(box["y"] + box["height"]),
-                    ],
-                    "text":         name,
-                    "value":        value,
-                    "label":        name,
-                    "enabled":      enabled,
-                    "visible":      True,
-                    "focused":      False,
-                    "confidence":   1.0,
-                    "source":       "web",
-                    "window_role":  "active",
-                    "window_title": self._page.title() if self._page else "",
-                })
-            except Exception:
-                continue
+        title = raw["title"]
+        for i, item in enumerate(raw["elements"]):
+            elements.append({
+                "element_id":   f"web_{i}",
+                "type":         _map_type(item["tag"], item["role"], item["inputType"]),
+                "control_type": item["tag"],
+                "bbox":         self._to_screen(item["box"], origin),
+                "text":         item["name"],
+                "value":        item["value"],
+                "label":        item["name"],
+                "enabled":      item["enabled"],
+                "visible":      True,
+                "focused":      item["focused"],
+                "confidence":   1.0,
+                "source":       "web",
+                "window_role":  "active",
+                "window_title": title,
+            })
 
         return elements
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+# The whole page in one round trip.
+#
+# This used to be a Playwright call per property per element - bounding_box,
+# get_attribute x5, inner_text, input_value, is_enabled, is_visible - about ten
+# CDP round trips each. On the grade portal's 303 controls that is ~3000 round
+# trips, and a single snapshot took longer than the recorder's one-second
+# capture interval, so a browser demo recorded zero frames. The scanner already
+# reads a page this way (scope2/executor/extract_context.js); this mirrors it.
+#
+# The name cascade below is rule 3 of scope2/labeling/resolve.py, "aria-label /
+# aria-labelledby", ahead of placeholder. A sheet-style page names its cells
+# only by reference, so stopping at aria-label yields one label per *column*
+# where there is really one per *cell*: on the grade portal that is a handful of
+# names for 250 inputs, and the agent cannot tell row 1 from row 50.
+_EXTRACT_JS = """
+({selector, limit}) => {
+  const clean = (s) => (s || "").replace(/\\s+/g, " ").trim();
+
+  const ariaLabelledBy = (el) => {
+    const ids = (el.getAttribute("aria-labelledby") || "").split(/\\s+/).filter(Boolean);
+    if (!ids.length) return "";
+    const root = el.getRootNode();
+    const byId = (id) => (root && root.getElementById ? root.getElementById(id)
+                                                      : document.getElementById(id));
+    return ids.map((id) => { const n = byId(id); return n ? clean(n.textContent) : ""; })
+              .filter(Boolean).join(" ");
+  };
+
+  const all = Array.from(document.querySelectorAll(selector));
+  const out = [];
+  for (const el of all) {
+    if (out.length >= limit) break;
+
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 4 || rect.height < 4) continue;
+    const style = getComputedStyle(el);
+    if (style.visibility === "hidden" || style.display === "none") continue;
+
+    const tag = el.tagName.toLowerCase();
+    const name = clean(
+      el.getAttribute("aria-label")
+      || ariaLabelledBy(el)
+      || el.getAttribute("placeholder")
+      || el.getAttribute("title")
+      || el.getAttribute("name")
+      || el.innerText
+      || ""
+    ).slice(0, 120);
+
+    const isField = tag === "input" || tag === "textarea" || tag === "select";
+    out.push({
+      tag: tag,
+      role: el.getAttribute("role") || tag,
+      inputType: tag === "input" ? (el.getAttribute("type") || "") : "",
+      name: name,
+      value: isField ? (el.value || "") : "",
+      enabled: !el.disabled,
+      focused: el === document.activeElement,
+      box: {x: rect.x, y: rect.y, width: rect.width, height: rect.height},
+    });
+  }
+  return {elements: out, total: all.length, title: document.title};
+}
+"""
+
 
 def _map_type(tag: str, role: str, input_type: str = "") -> str:
     """Map a DOM tag/role onto the canonical vocabulary in observers/schema.py.
