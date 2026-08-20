@@ -755,6 +755,29 @@ perception.
 
   *(Guard: `tests/scope2/test_training_element_cap.py` — 10. One was rewritten before shipping after catching that it asserted nothing real: the first version's helper took a cap argument and ignored it, so it compared a model to itself and passed vacuously.)*
 
+  **EXTENDED 2026-08-21, third pass — first real recordings, two portal changes, an approved generator.**
+
+  **Two coordinate bugs, both silent, both found by checking the operator's actual recordings rather than trusting the code.**
+
+  1. `_screen_origin` scaled the whole of `window.screenX` by `devicePixelRatio` — but that value carries the offset of every monitor to the left, which is *not* in this window's scale factor. The operator's laptop is the **secondary** display at X=1920 beside a 1920-wide primary at 125%, so every bbox sat 1920 × 0.25 = 480 px right of the truth. Solving for the transform that fixes the recording gave a pure **+465 px** shift, putting 28 of 28 clicks back on an element. Y was exact — both monitors share a top edge, and 0 × 0.25 is 0. **Decision: stop reconstructing the origin.** `Chrome_RenderWidgetHostHWND` is the OS window that *is* the viewport, and `GetWindowRect` answers in the same coordinate space `pynput` records clicks in, because it is the same process.
+  2. Even then, clicks landed on the wrong **column**. Windows scales geometry for a process that has not declared DPI awareness, so the process saw a 3456-wide desktop while clicks arrived in a 3840-wide one. Awareness can be claimed once and the first claim wins — and something in the ordinary import chain already claims `SYSTEM`. So `components/dpi.py` imports nothing but `ctypes`, and the entry points call it as their **first executable line**. Confirmed against the live browser: **9 of 9 clicks on the right column and the right student.**
+
+  The recorder now warns per click when a click matched no element — the signal that would have caught both of these in five seconds instead of after sixty steps. It warns rather than drops: clicking empty space is legitimate, being unable to say *where* is not.
+
+  **Portal changed, direct request:** Remarks derives from the grade as it is typed, *unless* a person changes it, and Save is no longer part of the demonstrated task — the filled sheet stays reviewable until a human commits it. The pass test reads the table's own `data-scale` (v6b runs 1.00–5.00 inverted, where a hardcoded `>= 75` would mark every row Failed and look fine) and the wording comes from the column's own options (v6a spells them `PASSED`/`FAILED`). No override flag was needed: assigning `.value` in script does not fire `change`, so every change event that arrives came from a human.
+
+  > **Honest consequence.** Remarks was the one column with no answer anywhere in the source data — the field the agent had to *decide* rather than copy, and the reason the ported rule-induction code was interesting for this scope. Scope #2's demonstrated work is now three columns of transfer, and the pass/fail rule lives in the application rather than in anything learned. `oversample_tails` has no submit transition left to oversample here.
+
+  **Data generation — approved by the thesis panel** to accelerate training. The concern was raised first and overruled on the user's authority, which is the right way round: a model trained on generated data clones *the generator*, so a clone score measured on it is a measure of the generator, not evidence about human behaviour.
+
+  Built accordingly. `scripts/generate_portal_demos.py` drives a **real browser** through the **real portal**, snapshotting through the same `WebObserver` the recorder uses — every step carries a genuine 303-element DOM with real labels and real geometry, and values come from `GradeSheetSource` so a generated row says what a human copying that row would have said.
+
+  The load-bearing detail is that it snapshots **before and after every action**. A first attempt reused one frozen state per step, which teaches nothing: `is_filled` never changes, so the model cannot learn that a filled field is done — the exact failure recorded above from Scope #1's early looping model. Verified on real output: filled-field count climbs **51 → 63** across three students, 9 of 9 clicks resolve, and typing a grade raises the count by **two**, because the portal's derived Remarks lands in the same state.
+
+  **Provenance decision:** the marker rides on *every step* (`generated: true`, plus the arguments that produced it), not on a manifest — a step copied into another folder takes its provenance with it. Sessions land in their own `session_gen_*` directories under `data/demos/generated`, and `clean_demos.py` reports the human/generated split on every run. "0 generated" is the evidence a run was human-only; silence is not evidence of anything.
+
+  *(Guards: `test_web_observer_multi_monitor.py` — 14; `test_portal_derived_remarks.py` — 12, driven through a real browser; `test_generated_demos.py` — 11, generating for real and checking progression rather than that files exist. Full suite: 1288 passed, 11 skipped, same pre-existing failures.)*
+
   **Not done, and it is the whole point: no demonstrations have been recorded yet.** That is a live run, which is the user's to execute. Until then `COLUMN_MAP` is still doing the work a learned mapping should do.
 
 ---

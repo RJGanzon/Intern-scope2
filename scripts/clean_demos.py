@@ -108,6 +108,7 @@ def main(argv=None):
     os.makedirs(dst, exist_ok=True)
 
     kept = drop_sel = drop_junk = drop_dupe = 0
+    kept_generated = 0
     for sess in sorted(glob.glob(os.path.join(src, "session_*"))):
         files = sorted(glob.glob(os.path.join(sess, "live_step_*.json")))
         out = os.path.join(dst, os.path.basename(sess))
@@ -151,9 +152,18 @@ def main(argv=None):
                               "w", encoding="utf-8"), ensure_ascii=False)
             oi += 1
             kept += 1
+            if t.get("generated"):
+                kept_generated += 1
 
     print(f"kept {kept}  |  dropped: dropdown-select={drop_sel}, "
           f"junk={drop_junk}, dupes={drop_dupe}  ->  {dst}")
+    # Provenance, always, not only when mixed. A number that reads "0 generated"
+    # is the evidence that a run was human-only; silence is not.
+    print(f"provenance: {kept - kept_generated} human, {kept_generated} generated")
+    if kept_generated and kept - kept_generated:
+        print("  NOTE: this directory mixes both. A clone score measured on it "
+              "is partly a measure of the generator, so hold a human session out "
+              "and score against that separately.")
 
 
 if __name__ == "__main__":
