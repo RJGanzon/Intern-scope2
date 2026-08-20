@@ -9,6 +9,7 @@ the user actually clicked. Reports per-step match + overall click-clone rate.
 Usage:
     python scripts/test_clone.py                       # newest policy_nav session
     python scripts/test_clone.py <session_dir>
+    python scripts/test_clone.py <session_dir> --model tasks/grade_portal/model.pt
 """
 from __future__ import annotations
 import os, sys, glob, json
@@ -19,7 +20,7 @@ sys.path.insert(0, _ROOT)
 
 from intelligence.model.transformer import predict, _find_click_elem_idx  # noqa: E402
 
-MODEL = os.path.join(_ROOT, "tasks", "form_filling", "model.pt")
+DEFAULT_MODEL = os.path.join(_ROOT, "tasks", "form_filling", "model.pt")
 
 
 def elem_at(state, pos, role="active"):
@@ -47,8 +48,24 @@ def label_of(e):
 
 
 def main():
-    if len(sys.argv) > 1:
-        sess = sys.argv[1]
+    # Which checkpoint. Scope #1's was the only one that existed when this was
+    # written, and scoring scope #2 against it would have produced a real number
+    # for the wrong model rather than an error.
+    args = [a for a in sys.argv[1:]]
+    model = DEFAULT_MODEL
+    if "--model" in args:
+        i = args.index("--model")
+        model = args[i + 1]
+        del args[i:i + 2]
+        if not os.path.isabs(model):
+            model = os.path.join(_ROOT, model)
+    if not os.path.exists(model):
+        print(f"no checkpoint at {model}")
+        return
+    print(f"  model: {os.path.relpath(model, _ROOT)}")
+
+    if args:
+        sess = args[0]
     else:
         cands = glob.glob(os.path.join(_ROOT, "data", "demos", "policy_nav", "session_*"))
         sess = max(cands, key=os.path.getmtime) if cands else None
@@ -82,7 +99,7 @@ def main():
             else label_of(elem_at(nstate, pos) or elem_at(state, pos))
 
         # model prediction (pure: state + short history, no hand-fed signals)
-        pred = predict(state=state, history=history[-3:], model_path=MODEL)
+        pred = predict(state=state, history=history[-3:], model_path=model)
         ei = pred.get("click_elem_idx", -1)
         predicted = label_of(els[ei]) if 0 <= ei < len(els) else "?"
         # index-level match (matches training's click_acc), with label fallback
