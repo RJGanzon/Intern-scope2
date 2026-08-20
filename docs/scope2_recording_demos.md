@@ -202,8 +202,19 @@ native dropdown is drawn by Windows, not by the page — there is no element und
 your click, so the step is worth nothing. The first letter selects the option
 and records cleanly.
 
+### Finish the pass with Save
+
+Click **Save All Rows** once, at the end of the pass. Submitting is a *learned*
+action here, exactly as it is in Scope #1 — nothing hardcodes "the form is full,
+now submit." `oversample_tails.py` exists to copy that rare last transition
+until it is well enough represented to learn, and it can only oversample a Save
+that is actually in the trace.
+
 ### Rules for the whole session
 
+- **Fill every column, Remarks included.** Remarks is the one the agent cannot
+  look up, so a pass that skips it teaches nothing about the only field that
+  needs a decision.
 - **Same column order on every row.** That consistency *is* the thing being
   learned.
 - **Do not go back and fix a row.** If you fumble one, finish it and move on;
