@@ -78,6 +78,12 @@ COLUMN_SOURCE = {
 }
 
 
+def _prefill_for(args, index):
+    """How many rows are already done when session `index` starts."""
+    values = [int(v) for v in str(args.prefill).split(",") if str(v).strip()]
+    return values[index % len(values)] if values else 0
+
+
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -111,6 +117,15 @@ def parse_args(argv=None):
     ap.add_argument("--row-order", default="top-down",
                     choices=["top-down", "bottom-up", "shuffled"],
                     help="Order the rows are visited in.")
+    ap.add_argument("--prefill", default="0",
+                    help="Rows to fill BEFORE recording starts, per session, "
+                         "comma-separated (e.g. 0,12,28). Those rows end up "
+                         "filled in every state but contribute no steps, so the "
+                         "session demonstrates continuing a sheet someone else "
+                         "already started. Without it every session begins on an "
+                         "empty sheet and walks the roster in order, and 'which "
+                         "row next' can be answered by counting steps instead of "
+                         "reading the page - which is what a model will do.")
     ap.add_argument("--seed", type=int, default=None,
                     help="Only used by --row-order shuffled; recorded in the session.")
     ap.add_argument("--headed", action="store_true",
@@ -300,19 +315,35 @@ def generate_session(observer, page, source, args, index, students):
         "row_order": args.row_order,
         "seed": args.seed,
         "sheet": os.path.basename(args.sheet),
+        "prefill": _prefill_for(args, index),
         "script": "scripts/generate_portal_demos.py",
         "derived_from": (os.path.basename(args.from_demo.rstrip("/\\"))
                          if args.from_demo else None),
     }
-    writer = SessionWriter(args.out, meta)
     columns = [c.strip() for c in args.order.split(",") if c.strip()]
+    writer = SessionWriter(args.out, meta)
 
     # A fresh page per session, so row one starts empty the way a human's would.
     page.reload()
     page.wait_for_selector("#records-body tr")
 
+    # Rows filled before anyone is watching. They appear in every state that
+    # follows and generate no steps of their own, which is what makes this a
+    # demonstration of CONTINUING rather than of starting.
+    prefill = meta.get("prefill") or 0
+    for row in students[:prefill]:
+        ids = cell_handles(page, row)
+        if not ids:
+            continue
+        source.refresh(row)
+        for col in columns:
+            value = source.lookup(COLUMN_SOURCE[col])
+            if ids.get(col) and value is not None:
+                page.locator(f"#{ids[col]}").fill(str(value))
+    remaining = students[prefill:]
+
     state = observer.snapshot()
-    for row in students:
+    for row in remaining:
         ids = cell_handles(page, row)
         if not ids:
             continue

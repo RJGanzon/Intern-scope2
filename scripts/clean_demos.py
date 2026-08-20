@@ -72,6 +72,15 @@ def is_form(st, scope=INSURANCE_SCOPE):
     return scope.is_target_window(st or {})
 
 
+def _typed_text(keyboard_actions):
+    """Whatever this step entered, pasted or typed."""
+    out = []
+    for group in keyboard_actions:
+        for stroke in group.get("strokes", []):
+            out.append(stroke.get("pasted_text") or stroke.get("key") or "")
+    return "".join(out).strip()
+
+
 def n_listitems(st):
     return sum(1 for e in st.get("elements", [])
                if "listitem" in (e.get("type") or "").lower())
@@ -109,12 +118,14 @@ def main(argv=None):
 
     kept = drop_sel = drop_junk = drop_dupe = 0
     kept_generated = 0
+    drop_retype = 0
     for sess in sorted(glob.glob(os.path.join(src, "session_*"))):
         files = sorted(glob.glob(os.path.join(sess, "live_step_*.json")))
         out = os.path.join(dst, os.path.basename(sess))
         os.makedirs(out, exist_ok=True)
         oi = 0
         prev_lbl = None
+        prev_txt = None
         for f in files:
             t = json.load(open(f, encoding="utf-8"))
             st = t.get("state", {})
@@ -142,8 +153,21 @@ def main(argv=None):
                     drop_dupe += 1
                     continue
                 prev_lbl = lbl
+                prev_txt = None   # a new field: whatever is typed next is a fresh fill
             elif k:
-                pass   # keep typing (fills the form)
+                # RETRY FILTER: the same text entered again with no click in
+                # between is one field being filled twice, not two fills. A real
+                # recording had a value pasted three times into one cell because
+                # it did not look like it had taken. Keeping those teaches the
+                # model to repeat itself, which is the loop this project already
+                # fixed once. The click that follows a genuine move to the next
+                # field resets this, so consecutive fills of DIFFERENT fields are
+                # untouched.
+                _txt = _typed_text(k)
+                if _txt and _txt == prev_txt:
+                    drop_retype += 1
+                    continue
+                prev_txt = _txt
             else:
                 drop_junk += 1
                 continue
@@ -156,7 +180,7 @@ def main(argv=None):
                 kept_generated += 1
 
     print(f"kept {kept}  |  dropped: dropdown-select={drop_sel}, "
-          f"junk={drop_junk}, dupes={drop_dupe}  ->  {dst}")
+          f"junk={drop_junk}, dupes={drop_dupe}, retypes={drop_retype}  ->  {dst}")
     # Provenance, always, not only when mixed. A number that reads "0 generated"
     # is the evidence that a run was human-only; silence is not.
     print(f"provenance: {kept - kept_generated} human, {kept_generated} generated")
