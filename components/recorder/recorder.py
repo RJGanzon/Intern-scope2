@@ -86,6 +86,24 @@ except ImportError:
     except ImportError:
         _UIA_OBSERVER_AVAILABLE = False
 
+def _elem_under(state: dict, pos) -> Optional[dict]:
+    """Smallest element whose bbox contains pos, or None."""
+    if not state or not pos:
+        return None
+    px, py = float(pos[0]), float(pos[1])
+    best, best_area = None, float("inf")
+    for elem in state.get("elements") or []:
+        box = elem.get("bbox") or []
+        if len(box) != 4:
+            continue
+        x1, y1, x2, y2 = (float(v) for v in box)
+        if x1 <= px <= x2 and y1 <= py <= y2:
+            area = (x2 - x1) * (y2 - y1)
+            if area < best_area:
+                best, best_area = elem, area
+    return best
+
+
 def _foreground_title() -> str:
     """Title of the window that has focus right now, "" if unknowable.
 
@@ -1568,6 +1586,7 @@ class DemoRecorder:
         self._mouse_down_time: float = 0.0
         self._last_click_time: float = 0.0
         self._last_click_pos: list | None = None
+        self._clicks_off_target: int = 0
         # ctrl / alt key state
         self._ctrl_held: bool = False
         self._alt_held:  bool = False
@@ -2395,6 +2414,23 @@ class DemoRecorder:
                   f"while observing {post.get('window_title') or pre.get('window_title')!r} "
                   f"-- not a demonstration step")
             return
+
+        # A click that lands on no element at all is the one failure this whole
+        # recording path cannot detect on its own: the state is full, the window
+        # is right, the step is well-formed, and training silently ignores it
+        # because an unresolvable click is the same -1 as a click on a banner.
+        # It caught a real one - bboxes translated with the wrong monitor origin
+        # put every element ~465 px right of where the operator was clicking, and
+        # 60 steps recorded perfectly before anyone could tell. Warn, do not drop:
+        # clicking empty space is legitimate, being unable to say WHERE is not.
+        if action_type in ("click", "double_click"):
+            _pos = event.get("click_pos") or [0, 0]
+            if not _elem_under(post, _pos) and not _elem_under(pre, _pos):
+                self._clicks_off_target += 1
+                print(f"       [!] click at {_pos} matched no element "
+                      f"({self._clicks_off_target} so far this session) -- if this "
+                      f"repeats, the coordinates and the page disagree and the "
+                      f"recording is not usable")
 
         # filter noise-app actions (terminal/browser) using fresh post-state
         if self._is_noise_app(post) and self._is_noise_app(pre):

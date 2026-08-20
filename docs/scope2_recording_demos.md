@@ -50,7 +50,11 @@ Two windows, side by side, never overlapping. Snap them with `Win`+`←` /
 > spreadsheet cell can be recorded as a click on the portal input underneath it.
 > Side by side is not a style preference.
 
-**Dual monitor:** keep *Chrome and Excel* on the primary, and use the second
+**Dual monitor:** the browser window's position is read from Windows directly
+(`Chrome_RenderWidgetHostHWND`, the OS window that *is* the viewport), in the
+same coordinate space the recorder sees clicks in — so a second monitor is fine,
+whichever one is primary. Keep *Chrome and Excel* on the same screen as each
+other, and use the second
 screen freely for anything else — terminal, docs, music. Only the browser
 window's position matters: element rectangles are built from
 `window.screenX/screenY` (virtual-desktop space, negative to the left of
@@ -317,3 +321,4 @@ without it.
 | Portal steps you did not perform | A window is overlapping the portal. Stop, fix the layout, start a new session. |
 | `WARNING: ... more than max_elements` | Pass `--max_elements 320` to `train.py`. |
 | Values recorded as `""` | Fixed 2026-08-21. If it persists, the clipboard was empty at paste time. |
+| `[!] click at ... matched no element` | The coordinates and the page disagree. Stop — the session is not usable. It means the browser's screen position could not be read and the fallback geometry was wrong (this is what a multi-monitor layout used to do). |

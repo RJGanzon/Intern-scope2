@@ -77,6 +77,7 @@ class WebObserver:
         screen_coords: bool         = True,
     ):
         self.headless     = headless
+        self._page_title_cache: str = ""
         self.browser_url  = browser_url
         # recorder.py documents the trace element schema as
         # "bbox: [x1,y1,x2,y2] - screen coordinates", and ActionExecutor._click
@@ -181,6 +182,9 @@ class WebObserver:
     def _capture(self) -> Dict[str, Any]:
         page  = self._page
         title = page.title()
+        # _screen_origin finds the OS window by this title; it runs a few
+        # lines below and there is no reason to ask the page twice.
+        self._page_title_cache = title
         url   = page.url
         vp    = page.viewport_size or {"width": 1920, "height": 1080}
         W, H  = vp["width"], vp["height"]
@@ -214,8 +218,110 @@ class WebObserver:
             },
         }
 
+    def _content_rect_win32(self, title: str) -> Optional[Dict[str, float]]:
+        """The content area's rectangle, asked of Windows rather than computed.
+
+        Chrome puts the web content in its own child window class,
+        Chrome_RenderWidgetHostHWND, whose rectangle IS the viewport - no
+        borders, no toolbar, nothing to subtract. GetWindowRect answers in the
+        same coordinate space the calling process sees, which is also the space
+        pynput reports clicks in and pyautogui clicks in, because they are all
+        this process. That shared space is the point: it holds whatever the
+        DPI-awareness of this process is, on whichever monitor, with no
+        reconstruction to get wrong.
+
+        Returns None when Windows cannot be asked (another OS, no pywin32, no
+        matching window), leaving the DOM-geometry path to try instead.
+        """
+        try:
+            import win32gui
+        except Exception:
+            return None
+
+        needle = (title or "").strip().lower()
+        if not needle:
+            return None
+
+        found: List[int] = []
+
+        def _visit(hwnd, _ctx):
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
+            # Chrome's own window title is "<page title> - Google Chrome".
+            if needle not in (win32gui.GetWindowText(hwnd) or "").lower():
+                return True
+            child: List[int] = []
+
+            def _visit_child(ch, _c):
+                # Chrome keeps several windows of this class, most of them
+                # 2x2-pixel stubs. The viewport is the largest one; taking the
+                # first found a stub, and every bbox collapsed onto a 2-pixel
+                # square without erroring.
+                if win32gui.GetClassName(ch) == "Chrome_RenderWidgetHostHWND":
+                    try:
+                        l, t, r, b = win32gui.GetWindowRect(ch)
+                    except Exception:
+                        return True
+                    child.append(((r - l) * (b - t), ch))
+                return True
+
+            try:
+                win32gui.EnumChildWindows(hwnd, _visit_child, None)
+            except Exception:
+                return True
+            if child:
+                found.append(max(child)[1])
+            return True
+
+        try:
+            win32gui.EnumWindows(_visit, None)
+        except Exception:
+            return None
+        if not found:
+            return None
+
+        try:
+            left, top, right, bottom = win32gui.GetWindowRect(found[0])
+        except Exception:
+            return None
+        # A viewport is not a few pixels across. Anything this small is a stub
+        # or a collapsed window, and using it would silently squash every bbox.
+        if right - left < 200 or bottom - top < 200:
+            return None
+        return {"left": float(left), "top": float(top),
+                "right": float(right), "bottom": float(bottom)}
+
+    @staticmethod
+    def _virtual_screen() -> Optional[Dict[str, int]]:
+        """Size of the whole desktop, every monitor included.
+
+        screen_resolution normalises click coordinates, and a browser on a
+        secondary monitor has coordinates past the primary's width - dividing
+        those by one monitor's size puts them outside 0..1.
+        """
+        try:
+            import win32api
+            import win32con
+            return {
+                "width":  int(win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN)),
+                "height": int(win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN)),
+            }
+        except Exception:
+            return None
+
     def _screen_origin(self, page: Any) -> Optional[Dict[str, float]]:
         """Where the viewport's top-left sits on the physical screen.
+
+        Windows is asked first (see _content_rect_win32). The DOM-geometry path
+        below is the fallback, and it has a real limit worth knowing: it scales
+        the whole of window.screenX by devicePixelRatio, but on a multi-monitor
+        desktop that value carries the offset of every monitor to the left, and
+        that offset is not in this window's scale factor. Measured on a real
+        two-monitor setup - a 1920-wide primary with the laptop beside it at
+        125% - every bbox came out 465 px too far right (1920 x 0.25, less the
+        border term), which is enough to land every click on the wrong column
+        while looking entirely plausible. Y was exact, because the monitors
+        shared a top edge and 0 x 0.25 is 0.
 
         `window.screenX/Y` is the browser window; the content box starts inside
         the border and below the browser's own UI. The border is the leftover
@@ -253,6 +359,33 @@ class WebObserver:
                            "bboxes stay in viewport coordinates.", exc)
             return None
 
+        inner_w = float(geometry.get("innerWidth") or 0)
+        rect = self._content_rect_win32(self._page_title_cache) if inner_w else None
+        # Checked here as well as inside the lookup: this is the point of use,
+        # and a rect a few pixels across would collapse every bbox onto a dot
+        # rather than fail, whichever source produced it.
+        if rect and (rect["right"] - rect["left"] < 200
+                     or rect["bottom"] - rect["top"] < 200):
+            logger.warning("WebObserver: content rect %s is too small to be a "
+                           "viewport - falling back to DOM geometry.", rect)
+            rect = None
+
+        if rect:
+            # The scale comes from the measurement itself rather than
+            # devicePixelRatio, so page zoom is included for free.
+            scale = (rect["right"] - rect["left"]) / inner_w
+            virtual = self._virtual_screen()
+            return {
+                "dx":  rect["left"],
+                "dy":  rect["top"],
+                "dpr": scale,
+                "screen_width":  (virtual or {}).get(
+                    "width", int(geometry["screenWidth"] * scale)),
+                "screen_height": (virtual or {}).get(
+                    "height", int(geometry["screenHeight"] * scale)),
+                "source": "win32",
+            }
+
         border = max(0.0, (geometry["outerWidth"] - geometry["innerWidth"]) / 2.0)
         chrome = max(0.0, geometry["outerHeight"] - geometry["innerHeight"] - border)
         dpr    = geometry["dpr"] or 1.0
@@ -262,6 +395,7 @@ class WebObserver:
             "dpr": dpr,
             "screen_width":  int(geometry["screenWidth"] * dpr),
             "screen_height": int(geometry["screenHeight"] * dpr),
+            "source": "dom",
         }
 
     @staticmethod
