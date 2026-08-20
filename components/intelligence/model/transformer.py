@@ -694,6 +694,12 @@ class TrajectoryDataset(Dataset):
         _cache_path = roots[0] / _cache_name
         # ELEM_FEATURES in the key → a change in the feature layout invalidates
         # any stale cache built with a different one.
+        # Counted during the scan, carried through the cache, reported by
+        # _warn_if_truncated() - a cache hit skips the scan entirely, and a
+        # warning you only ever see once is a warning you will miss.
+        self._truncated_files = 0
+        self._max_seen        = 0
+
         _cache_key  = (max_elements, hist_len, aug_drop_prob, ELEM_FEATURES,
                        "v11_backspace_setvalue_fix", disambiguate_attempted, rare_weight_basis,
                        section_pattern, section_prefix, action_space)
@@ -725,6 +731,9 @@ class TrajectoryDataset(Dataset):
                     self._samples           = _cached["samples"]
                     self._sample_weights    = _cached.get("sample_weights")
                     self._attempted_by_file = _cached.get("attempted_by_file", {})
+                    self._truncated_files   = _cached.get("truncated_files", 0)
+                    self._max_seen          = _cached.get("max_seen", 0)
+                    self._warn_if_truncated(max_elements)
                     print(f"[Dataset] Loaded from cache: {len(self._samples)} samples "
                           f"from {len(self._grouped_files)} session(s).")
                     self._prime_all_embeddings()
@@ -806,6 +815,18 @@ class TrajectoryDataset(Dataset):
                     continue
                 state = t.get("state", {})
                 elems = state.get("elements", [])
+                # Everything past max_elements is invisible to training: both
+                # encode_state and _find_click_elem_idx slice to it, so a click
+                # on a later element resolves to -1 and its pointer loss is
+                # ignored. The step still counts as a click for the action-type
+                # head, so nothing looks wrong - the model simply never learns
+                # where those clicks went. A 50-row grid blows past the default
+                # of 128 routinely (the scope #2 portal is 303 elements, and 29
+                # of its 50 grade cells sit beyond 128), which is exactly the
+                # failure WebObserver's own element cap had one layer up.
+                if len(elems) > max_elements:
+                    self._truncated_files += 1
+                    self._max_seen = max(self._max_seen, len(elems))
                 active_interactive = sum(
                     1 for e in elems
                     if e.get("window_role") == "active"
@@ -897,6 +918,7 @@ class TrajectoryDataset(Dataset):
 
         if skipped:
             print(f"[Dataset] Skipped {skipped} traces with no active form controls.")
+        self._warn_if_truncated(max_elements)
         if not self._grouped_files:
             raise ValueError("No usable traces after filtering.")
 
@@ -985,6 +1007,8 @@ class TrajectoryDataset(Dataset):
                     "samples":           self._samples,
                     "sample_weights":    getattr(self, "_sample_weights", None),
                     "attempted_by_file": self._attempted_by_file,
+                    "truncated_files":   self._truncated_files,
+                    "max_seen":          self._max_seen,
                 }, _cf, protocol=4)
             print(f"[Dataset] Cache saved -> {_cache_path}")
         except Exception as _se:
@@ -992,6 +1016,23 @@ class TrajectoryDataset(Dataset):
 
         self._prime_all_embeddings()
         self._preload_tensors()
+
+    def _warn_if_truncated(self, max_elements: int) -> None:
+        """Say when states are bigger than the model is allowed to see.
+
+        encode_state and _find_click_elem_idx both slice to max_elements, so a
+        click on a later element resolves to -1 and its pointer loss is ignored.
+        The step still counts as a click for the action-type head, so nothing
+        looks wrong - the model simply never learns where those clicks went.
+        A 50-row grid passes the default of 128 routinely: the scope #2 grade
+        portal is 303 elements, with 29 of its 50 grade cells beyond the cap.
+        """
+        if not self._truncated_files:
+            return
+        print(f"[Dataset] WARNING: {self._truncated_files} trace(s) hold more than "
+              f"max_elements={max_elements} elements (largest seen: {self._max_seen}). "
+              f"Everything past the cap is invisible to training - a click landing "
+              f"there teaches nothing. Raise it with --max_elements.", flush=True)
 
     def _prime_all_embeddings(self) -> None:
         """

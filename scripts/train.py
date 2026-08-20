@@ -41,7 +41,12 @@ for _p in (_ROOT, _COMP):
         sys.path.insert(0, _p)
 
 
-def main():
+def build_parser():
+    """The CLI, separated from main() so its defaults can be tested.
+
+    --max_elements in particular is a flag whose wrong value fails silently,
+    so it is worth a test that it exists and still defaults to 128.
+    """
     parser = argparse.ArgumentParser(
         description="Train Intern's TransformerAgentNetwork via Behavioral Cloning."
     )
@@ -69,6 +74,11 @@ def main():
                         help="Feedforward dim (default: 128)")
     parser.add_argument("--dropout",        type=float, default=0.2,
                         help="Dropout rate (default: 0.2)")
+    parser.add_argument("--max_elements",   type=int,   default=128,
+                        help="Elements per state the model can see. Anything past this "
+                             "is dropped: a click landing there resolves to no element "
+                             "and teaches nothing. A 50-row grid needs far more than the "
+                             "default (the scope #2 grade portal is 303).")
     parser.add_argument("--hist_len",       type=int,   default=4,
                         help="Action-history window the model sees (default: 4; "
                              "try 8-12 for long multi-tab trajectories)")
@@ -91,7 +101,11 @@ def main():
                         help="'legacy' (default) -- unchanged. 'semantic' -- Universal Semantic "
                              "Action Space, ported 2026-08-12 from origin/verb-loop-rewrite. "
                              "Unverified on this project's own data until an isolated A/B runs.")
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
 
     # Resolve relative paths from the project root — comma-separated --trace_dir
     # pools multiple directories into one training run (see TrajectoryDataset).
@@ -127,6 +141,7 @@ def main():
         dim_feedforward=args.dim_feedforward,
         dropout=args.dropout,
         hist_len=args.hist_len,
+        max_elements=args.max_elements,
         disambiguate_attempted=args.disambiguate_attempted,
         rare_weight_basis=args.rare_weight_basis,
         section_pattern=args.section_pattern,

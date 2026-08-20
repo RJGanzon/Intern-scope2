@@ -730,6 +730,26 @@ perception.
 
   *(Guards: `tests/scope2/test_recorder_copy_paste_demo.py` — 10; `tests/scope2/test_run_scope2_wiring.py` — 13. Full suite: 1238 passed, 11 skipped, same 31 pre-existing failures unchanged.)*
 
+  **EXTENDED 2026-08-21, second pass — the pipeline was run end to end before asking for a recording session.** Synthetic traces built from the *real* portal DOM (headless, no live screen): `WebObserver` → 64 steps → `clean_demos --scope grade_portal` (64/64 kept) → `train.py`. It runs. It also surfaced the next silent cap.
+
+  **Real defect, same class as the observer cap fixed three commits earlier, one layer downstream.** `TrajectoryDataset`'s `max_elements` defaults to **128**, and both `encode_state` and `_find_click_elem_idx` slice to it. Measured against the real portal state of 303 elements:
+
+  > **29 of the 50 Grade cells sit past index 128.**
+
+  A click on any of them resolves to `-1` — the click pointer loss's ignore index, and also what an honest miss returns for a click on a decorative pane, so the discarded steps are indistinguishable from ordinary ones. The step still trains the action-type head. Everything below row ~21 would have taught the model nothing about *where* to click, in complete silence, after a full evening of recording.
+
+  **Decision: expose it, don't raise the default.** `--max_elements` is now a `train.py` flag defaulting to 128, so Scope #1 — whose forms are far smaller than the cap — trains byte-identically unless someone passes it. Plumbed CLI → `BCTrainer` → `transformer.train()`, which already accepted the parameter and simply had nothing wired to it.
+
+  Two things make this safe to raise:
+  - **It costs zero parameters.** The pointer heads score element embeddings through attention (`click_q`/`click_k`) rather than a fixed-width output layer. Measured in a real run: **142,629 params at both 128 and 320.**
+  - **`predict()` reads `max_elements` off the loaded checkpoint**, so training with a raised cap raises it for the live run too. That end-to-end link is now pinned by a test — losing it would silently put a fully-trained model back to seeing only the top of the grid.
+
+  **Truncation is no longer silent.** The dataset counts oversized traces during its scan and warns with both numbers and the flag that fixes it. The count is carried through the dataset's own pickle cache and re-warned on a cache hit — a warning you only see on the first run is one you will miss, and the second run is exactly when someone is iterating.
+
+  Also extracted `train.py`'s argparse into `build_parser()` so its defaults can be tested at all.
+
+  *(Guard: `tests/scope2/test_training_element_cap.py` — 10. One was rewritten before shipping after catching that it asserted nothing real: the first version's helper took a cap argument and ignored it, so it compared a model to itself and passed vacuously.)*
+
   **Not done, and it is the whole point: no demonstrations have been recorded yet.** That is a live run, which is the user's to execute. Until then `COLUMN_MAP` is still doing the work a learned mapping should do.
 
 ---

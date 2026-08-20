@@ -71,6 +71,8 @@ class BCTrainer:
         dim_feedforward: int   = 128,
         dropout:         float = 0.2,
         hist_len:        int   = 4,
+        max_elements:    int   = 128,   # elements per state the model can see;
+                                        # anything past it is invisible to training
         disambiguate_attempted: str = "none",   # "none" | "rank" | "section"
         rare_weight_basis:      str = "type",   # "none" | "type" | "field"
         section_pattern: Optional[str] = None,
@@ -90,6 +92,7 @@ class BCTrainer:
         self.dim_feedforward = dim_feedforward
         self.dropout         = dropout
         self.hist_len        = hist_len
+        self.max_elements    = max_elements
         self.disambiguate_attempted = disambiguate_attempted
         self.rare_weight_basis      = rare_weight_basis
         self.section_pattern        = section_pattern
@@ -126,6 +129,7 @@ class BCTrainer:
             dim_feedforward = self.dim_feedforward,
             dropout         = self.dropout,
             hist_len        = self.hist_len,
+            max_elements    = self.max_elements,
             disambiguate_attempted = self.disambiguate_attempted,
             rare_weight_basis      = self.rare_weight_basis,
             section_pattern        = self.section_pattern,
