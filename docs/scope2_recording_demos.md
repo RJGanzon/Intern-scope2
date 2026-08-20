@@ -50,11 +50,18 @@ Two windows, side by side, never overlapping. Snap them with `Win`+`←` /
 > spreadsheet cell can be recorded as a click on the portal input underneath it.
 > Side by side is not a style preference.
 
-**Dual monitor:** put everything on the primary. Element rectangles are built
-from `window.screenX/screenY` (virtual-desktop space, negative to the left of
+**Dual monitor:** keep *Chrome and Excel* on the primary, and use the second
+screen freely for anything else — terminal, docs, music. Only the browser
+window's position matters: element rectangles are built from
+`window.screenX/screenY` (virtual-desktop space, negative to the left of
 primary) while `screen_resolution` reports only the current monitor. On the
 primary those agree; off it they do not. Not measured on a real two-monitor rig
 — flagged as reasoned, and the safe setup costs nothing.
+
+Clicks and keystrokes on the second screen are dropped as source-side, the same
+way your trips to Excel are, so they cannot pollute the demo. Two things still
+hold: don't drag Chrome between monitors mid-session (its scale factor changes
+underneath the recording), and don't perform the demo itself over there.
 
 ---
 
@@ -75,14 +82,25 @@ right and the automation fails for a reason that is nowhere on screen.
 
 ## 3. Start Chrome with a debugging port
 
-Terminal 2:
+Terminal 2. This is **PowerShell** syntax - the shell this project is normally
+driven from. `^` line continuations and `%TEMP%` are CMD, and PowerShell rejects
+both with `Unexpected token '^'`:
 
-```bat
-"C:\Program Files\Google\Chrome\Application\chrome.exe" ^
-  --remote-debugging-port=9222 ^
-  --user-data-dir="%TEMP%\chrome-record" ^
-  http://127.0.0.1:8765/v0_base/index.html
+```powershell
+Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" -ArgumentList "--remote-debugging-port=9222", "--user-data-dir=$env:TEMP\chrome-record", "http://127.0.0.1:8765/v0_base/index.html"
 ```
+
+Confirm the port is really open before recording anything:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://localhost:9222/json/version | Select-Object -Expand Content
+```
+
+`-UseBasicParsing` skips the security prompt PowerShell raises when it would
+otherwise parse the response as a web page.
+
+JSON back means you are good. An error means Chrome ignored the flag, almost
+always because a normal Chrome was already running.
 
 The separate profile matters as much as the port. If your normal Chrome is
 already running, the flag is quietly ignored and there is no debug port at all.
@@ -93,8 +111,12 @@ deciding what tab 1 is.
 
 ## 4. Open the grade sheet
 
-`components\scope2\data\sheets\grade_sheet.xlsx`, sheet **SUMMARY**. Snap it to
-the half of the screen Chrome is not using.
+```powershell
+start components\scope2\data\sheets\grade_sheet.xlsx
+```
+
+Use the **SUMMARY** sheet, and snap it to the half of the screen Chrome is not
+using.
 
 ---
 

@@ -1560,6 +1560,7 @@ class DemoRecorder:
         self._pending_text   = ""
         self._pending_keys: list = []
         self._pending_hotkey: str = ""
+        self._pending_fg:     str = ""
         self._pre_key_state: dict | None = None
         self._quit_event     = threading.Event()
         # drag detection
@@ -2186,14 +2187,21 @@ class DemoRecorder:
                     "action_type": "keyboard",
                     "text":        self._pending_text,
                     "keystrokes":  list(self._pending_keys),
+                    "fg_title":    self._pending_fg,
                 })
                 self._pending_text  = ""
                 self._pending_keys  = []
+                self._pending_fg    = ""
             self._action_queue.put({"action_type": "hotkey", "hotkey": hotkey,
                                     "fg_title": _foreground_title()})
             return
 
-        # regular character — accumulate, no state read
+        # regular character — accumulate, no state read.
+        # The window is captured when the first character lands, not at flush
+        # time: text is flushed by the NEXT click, which may well be in a
+        # different window than the one that was typed into.
+        if not (self._pending_text or self._pending_keys):
+            self._pending_fg = _foreground_title()
         try:
             ch = key.char
             if ch and ch.isprintable() and not self._ctrl_held:
@@ -2448,9 +2456,11 @@ class DemoRecorder:
                 "action_type": "keyboard",
                 "text":        self._pending_text,
                 "keystrokes":  list(self._pending_keys),
+                "fg_title":    self._pending_fg,
             })
             self._pending_text = ""
             self._pending_keys = []
+            self._pending_fg   = ""
 
     def _flush_pending(self, *args, **kwargs):
         self._flush_text_to_queue()

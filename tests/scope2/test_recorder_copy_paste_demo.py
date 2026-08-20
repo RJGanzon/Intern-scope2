@@ -119,6 +119,36 @@ def test_tab_still_works_when_alt_was_never_pressed(recorder):
     assert queued["hotkey"] == "tab"
 
 
+def test_typing_in_another_window_is_not_a_fill(recorder):
+    """Found from a real question: "can I still use my second monitor?" Yes -
+    but typed text carried no window at all, so a command typed into a terminal
+    over there recorded as a fill on the portal. Clicks were already covered;
+    keystrokes were not."""
+    process(recorder, {"action_type": "keyboard", "text": "git status",
+                       "fg_title": "Windows PowerShell"})
+    assert steps(recorder) == []
+
+
+def test_typing_into_the_portal_still_records(recorder):
+    process(recorder, {"action_type": "keyboard", "text": "85", "fg_title": CHROME})
+    assert len(steps(recorder)) == 1
+
+
+def test_the_window_is_captured_where_the_typing_began(recorder, monkeypatch):
+    """Text is flushed by the NEXT click, which may be in a different window
+    than the one typed into. Capturing at flush time would blame the wrong one."""
+    monkeypatch.setattr(rec, "_foreground_title", lambda: EXCEL)
+    recorder._on_key_press(_char("8"))
+    recorder._on_key_press(_char("5"))
+
+    monkeypatch.setattr(rec, "_foreground_title", lambda: CHROME)
+    recorder._flush_text_to_queue()
+
+    queued = recorder._action_queue.get_nowait()
+    assert queued["text"] == "85"
+    assert queued["fg_title"] == EXCEL
+
+
 # ── the two real steps ───────────────────────────────────────────────────────
 
 def test_the_pasted_value_reaches_the_trace(recorder, monkeypatch):
@@ -207,6 +237,16 @@ class _FakeClipboard:
 
     def paste(self):
         return self._text
+
+
+class _char:
+    """pynput reports printable keys as objects carrying .char."""
+
+    def __init__(self, ch):
+        self.char = ch
+
+    def __str__(self):
+        return self.char
 
 
 class _key:
