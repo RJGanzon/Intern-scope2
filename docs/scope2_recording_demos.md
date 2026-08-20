@@ -167,12 +167,13 @@ Four columns come from the sheet. One does not.
 | Course | `PROGRAM` | BS Information Systems |
 | Year 1-5 | `YEAR LEVEL` | 2 |
 | Grade 0-100 | `FINAL GRADE` | 85 |
-| Remarks | **nothing — you decide** | Passed |
+| Remarks | **the portal fills it** | Passed |
 | Recommendations | optional | leave blank |
 
-> **Remarks is the interesting one.** No column in the sheet holds it. You work
-> it out from the grade — and being consistent about that (the same cutoff,
-> every row, all fifty) is what makes the rule learnable instead of arbitrary.
+> **Remarks fills itself.** Type the grade and the portal sets Passed/Failed
+> from it, reading the passing mark off the table's own scale. Change it by hand
+> and it stops following the grade for that row; clear it back to blank and it
+> starts following again. So you fill three columns, not four.
 
 ### Per row
 
@@ -195,26 +196,25 @@ That running log is live proof the recording is clean: two lines per value, with
 a source-side line between them. If you see portal steps you did not intend,
 stop and look before recording another forty rows of it.
 
-### Remarks: use the keyboard, not the dropdown
+### If you do override a Remark
 
-Click the Remarks cell, then press `P` or `F`. A mouse-picked option from a
-native dropdown is drawn by Windows, not by the page — there is no element under
-your click, so the step is worth nothing. The first letter selects the option
-and records cleanly.
+Click the cell and press `P` or `F` — never pick from the open dropdown with the
+mouse. A native dropdown is drawn by Windows, not by the page, so there is no
+element under your click and the step is worth nothing.
 
-### Finish the pass with Save
+### Do not press Save
 
-Click **Save All Rows** once, at the end of the pass. Submitting is a *learned*
-action here, exactly as it is in Scope #1 — nothing hardcodes "the form is full,
-now submit." `oversample_tails.py` exists to copy that rare last transition
-until it is well enough represented to learn, and it can only oversample a Save
-that is actually in the trace.
+Leave the pass unsaved. The point of this workflow is that a person reviews the
+filled sheet before anything is committed, so saving is not part of what the
+agent is being taught — it stays a human decision at the end.
+
+That also means `oversample_tails.py` has no submit transition to oversample
+here, unlike Scope #1. Skip it.
 
 ### Rules for the whole session
 
-- **Fill every column, Remarks included.** Remarks is the one the agent cannot
-  look up, so a pass that skips it teaches nothing about the only field that
-  needs a decision.
+- **Fill Course, Year and Grade.** Remarks follows the grade on its own; only
+  touch it when you genuinely disagree with it.
 - **Same column order on every row.** That consistency *is* the thing being
   learned.
 - **Do not go back and fix a row.** If you fumble one, finish it and move on;
@@ -268,9 +268,7 @@ most likely thing to go wrong here, and one flag away from fixed.
 ## 9. Train
 
 ```bash
-python scripts/oversample_tails.py data/demos/portal_clean data/demos/portal_final
-
-python scripts/train.py --trace_dir data/demos/portal_final --epochs 80 \
+python scripts/train.py --trace_dir data/demos/portal_clean --epochs 80 \
   --d_model 128 --num_layers 4 --dim_feedforward 256 --max_elements 320
 ```
 
@@ -281,10 +279,6 @@ python scripts/train.py --trace_dir data/demos/portal_final --epochs 80 \
 > Training warns when your traces are bigger than the cap. Raising it costs zero
 > parameters (142,629 either way), and the checkpoint remembers the value, so
 > the live run sees the whole grid too.
-
-Oversampling copies the tail of each pass — the last row, then Save — so the
-rare "everything is filled, now submit" transition is represented well enough to
-learn. That is how Scope #1 learned to click Submit on its own.
 
 Then check whether it cloned *you* rather than learning some order:
 

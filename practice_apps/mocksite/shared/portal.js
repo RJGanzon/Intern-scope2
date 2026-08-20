@@ -43,6 +43,12 @@
   function form() { return document.getElementById("grade-form"); }
   function scale() { return table().dataset.scale || "0-100"; }
 
+  // The columns the derivation joins. Keys, not labels: a relabelled
+  // variant renames what people see and keeps its keys, which is exactly
+  // the distinction between a cosmetic change and a schema change.
+  var GRADE_KEY = "grade";
+  var REMARKS_KEY = "remarks";
+
   // Variants opt out with data-associate-headers="false", which leaves every
   // input with no accessible name at all - the column header above it is then
   // the only thing that identifies it.
@@ -220,6 +226,58 @@
     return -1;
   }
 
+  /* ---- derived Remarks ---- */
+
+  // Remarks follows the grade, and stops following it the moment a person
+  // disagrees. Real encoding systems compute this - the encoder types a mark
+  // and the pass/fail column answers itself - and the operator still gets to
+  // override a borderline case before anything is saved.
+  //
+  // The pass test comes from the table's own declared scale, not a constant:
+  // v6b runs 1.00-5.00 inverted, where 3.00 is the passing mark and LOWER is
+  // better. Getting that backwards would fill every row with the wrong verdict
+  // and still look like it worked.
+  function passes(raw) {
+    var n = Number(raw);
+    if (raw === "" || isNaN(n)) return null;
+    return scale() === "1-5" ? n <= 3.0 : n >= 75;
+  }
+
+  // The wording comes from the column's own options, because a variant may
+  // spell them differently (v6a uses PASSED/FAILED). Anything that is not
+  // recognisably a pass/fail pair is left alone rather than guessed at.
+  function verdictOptions() {
+    var col = null;
+    cols.forEach(function (c) { if (c.key === REMARKS_KEY) col = c; });
+    if (!col || !col.options || col.options.length < 2) return null;
+    var pass = null, fail = null;
+    col.options.forEach(function (opt) {
+      var o = String(opt).trim();
+      if (/^pass/i.test(o)) pass = o;
+      if (/^fail/i.test(o)) fail = o;
+    });
+    return (pass && fail) ? { pass: pass, fail: fail } : null;
+  }
+
+  // Called after a grade changes. Silent no-op when the operator has already
+  // set this row's remark by hand - that is the whole point of "unless changed".
+  function deriveRemarks(i) {
+    var opts = verdictOptions();
+    if (!opts) return;
+
+    var grade = null, remarks = null;
+    inputsIn(i).forEach(function (el) {
+      if (el.dataset.key === GRADE_KEY) grade = el;
+      if (el.dataset.key === REMARKS_KEY) remarks = el;
+    });
+    if (!grade || !remarks || remarks.dataset.userSet === "1") return;
+
+    var verdict = passes(grade.value.trim());
+    var next = verdict === null ? "" : (verdict ? opts.pass : opts.fail);
+    if (remarks.value === next) return;
+    remarks.value = next;
+  }
+
   /* ---- validation ---- */
 
   // Returns { <key>: <message> } for one row's staged values. A row is only
@@ -385,9 +443,21 @@
       if (!el.dataset || el.dataset.row === undefined) return;
       var i = Number(el.dataset.row);
       rows[i].classList.remove("just-saved");
+      if (el.dataset.key === GRADE_KEY) deriveRemarks(i);
       refreshRow(i);
       updateCount();
       setStatus("", null);
+    });
+
+    // A person choosing a remark themselves ends the derivation for that row.
+    // No flag is needed to tell their choice from ours: assigning .value in
+    // script does not fire "change", so every event that arrives here came
+    // from a human. Clearing the cell back to blank hands the row back to the
+    // grade, which is the natural way to undo an override.
+    body.addEventListener("change", function (e) {
+      var el = e.target;
+      if (!el.dataset || el.dataset.key !== REMARKS_KEY) return;
+      el.dataset.userSet = el.value.trim() === "" ? "" : "1";
     });
 
     var revertBtn = document.getElementById("revert-btn");
