@@ -86,6 +86,22 @@ except ImportError:
     except ImportError:
         _UIA_OBSERVER_AVAILABLE = False
 
+def _foreground_title() -> str:
+    """Title of the window that has focus right now, "" if unknowable.
+
+    Read in the input listeners, which are otherwise forbidden from touching
+    state - the ban is about UIA walks holding the GIL and lagging input, and
+    these two Win32 calls are neither. It has to be read at event time: the
+    whole point is to catch the moment the demonstrator was in another app, and
+    by the time the worker gets to the event they may have switched back.
+    """
+    try:
+        import win32gui
+        return win32gui.GetWindowText(win32gui.GetForegroundWindow()) or ""
+    except Exception:
+        return ""
+
+
 def _cdp_reachable(browser_url: str, timeout: float = 2.0) -> bool:
     """Is a browser listening on this CDP endpoint?
 
@@ -1551,8 +1567,9 @@ class DemoRecorder:
         self._mouse_down_time: float = 0.0
         self._last_click_time: float = 0.0
         self._last_click_pos: list | None = None
-        # ctrl key state
+        # ctrl / alt key state
         self._ctrl_held: bool = False
+        self._alt_held:  bool = False
         # scroll debounce
         self._scroll_accum: float = 0.0
         self._scroll_pos: list = [0, 0]
@@ -2041,6 +2058,9 @@ class DemoRecorder:
         if self._mouse_down_pos is None:
             return
 
+        # Which window the demonstrator was actually in when they clicked.
+        # Read once here so every branch below reports the same instant.
+        fg = _foreground_title()
         # commit any typed text before this mouse action (preserve order)
         self._flush_text_to_queue()
 
@@ -2055,7 +2075,7 @@ class DemoRecorder:
             src = list(self._mouse_down_pos)
             self._mouse_down_pos  = None
             self._last_click_time = 0.0
-            self._action_queue.put({"action_type": "drag",
+            self._action_queue.put({"action_type": "drag", "fg_title": fg,
                                     "drag_src": src, "drag_dst": [x, y]})
             return
 
@@ -2067,14 +2087,16 @@ class DemoRecorder:
             self._mouse_down_pos  = None
             self._last_click_time = 0.0
             self._last_click_pos  = None
-            self._action_queue.put({"action_type": "double_click", "click_pos": [x, y]})
+            self._action_queue.put({"action_type": "double_click", "click_pos": [x, y],
+                                    "fg_title": fg})
             return
 
         # single click
         self._mouse_down_pos  = None
         self._last_click_time = now
         self._last_click_pos  = [x, y]
-        self._action_queue.put({"action_type": "click", "click_pos": [x, y]})
+        self._action_queue.put({"action_type": "click", "click_pos": [x, y],
+                                "fg_title": fg})
 
     def _on_key_press(self, key, *args):
         k = self._key_name(key)
@@ -2104,6 +2126,19 @@ class DemoRecorder:
         # track ctrl state
         if k in ("ctrl_l", "ctrl_r", "Key.ctrl_l", "Key.ctrl_r", "ctrl"):
             self._ctrl_held = True
+            return
+
+        # Track alt for one reason: Alt+Tab. Nothing watched alt, so the Tab
+        # half of an app switch was recorded as a plain "tab" hotkey - and the
+        # transformer folds every hotkey into the type class, so each switch
+        # between the source and the target taught the model to fill a field.
+        # A demo that reads its values from another window does this constantly.
+        if k in ("alt_l", "alt_r", "alt_gr", "Key.alt_l", "Key.alt_r", "alt"):
+            self._alt_held = True
+            return
+        if self._alt_held:
+            # Any key while alt is down belongs to a window-management gesture,
+            # not to the form.
             return
 
         # detect hotkeys: ctrl+letter, tab, enter, escape, arrows
@@ -2154,7 +2189,8 @@ class DemoRecorder:
                 })
                 self._pending_text  = ""
                 self._pending_keys  = []
-            self._action_queue.put({"action_type": "hotkey", "hotkey": hotkey})
+            self._action_queue.put({"action_type": "hotkey", "hotkey": hotkey,
+                                    "fg_title": _foreground_title()})
             return
 
         # regular character — accumulate, no state read
@@ -2169,6 +2205,8 @@ class DemoRecorder:
         k = self._key_name(key)
         if k in ("ctrl_l", "ctrl_r", "Key.ctrl_l", "Key.ctrl_r", "ctrl"):
             self._ctrl_held = False
+        if k in ("alt_l", "alt_r", "alt_gr", "Key.alt_l", "Key.alt_r", "alt"):
+            self._alt_held = False
 
     # ── internal ───────────────────────────────────────────────────────────────
 
@@ -2326,6 +2364,30 @@ class DemoRecorder:
                 post = pre
             self._last_state = post
 
+        # SOURCE-SIDE filter: the observed window has to be the one the
+        # demonstrator was actually in.
+        #
+        # A demo that reads its values from a second window - Excel for the
+        # grade portal, Notepad for the insurance form - performs three actions
+        # per value that are not part of the demonstration: click the source
+        # cell, copy it, switch back. Nothing here saw them for what they were.
+        # WebObserver reports the page it is attached to no matter which window
+        # is in front, so a click in Excel was recorded against the portal's
+        # element list and landed on whichever input sat underneath - the
+        # observer cannot see the window that was actually clicked, so the
+        # recorder has to. Ctrl+C went in as a hotkey, and the transformer folds
+        # hotkeys into the type class, so every copy taught the model to fill.
+        #
+        # UIA is unaffected: it snapshots the foreground window, so its title is
+        # the foreground title and this always passes.
+        _fg = (event.get("fg_title") or "").lower()
+        _observed = (post.get("window_title") or pre.get("window_title") or "").lower()
+        if _fg and _observed and _observed not in _fg:
+            print(f"       [source-side] {action_type} in {event.get('fg_title')!r} "
+                  f"while observing {post.get('window_title') or pre.get('window_title')!r} "
+                  f"-- not a demonstration step")
+            return
+
         # filter noise-app actions (terminal/browser) using fresh post-state
         if self._is_noise_app(post) and self._is_noise_app(pre):
             return
@@ -2430,7 +2492,14 @@ class DemoRecorder:
             kb_entry = {"actions": []}
         elif action_type == "hotkey" and hotkey:
             mouse_entry = {"actions": []}
-            kb_entry = {"actions": [{"hotkey": hotkey, "strokes": [{"key": hotkey, "pasted_text": ""}]}]}
+            # A paste carries the value it entered. _process_event already reads
+            # the clipboard for exactly this, but the text stopped at the console
+            # log line and never reached the file: a demo filled by copy-paste
+            # recorded every value as "". The trace is what gets audited later,
+            # so it has to say what was actually entered.
+            pasted = clipboard if hotkey == "ctrl+v" else ""
+            kb_entry = {"actions": [{"hotkey": hotkey,
+                                     "strokes": [{"key": hotkey, "pasted_text": pasted}]}]}
         elif action_type == "keyboard":
             mouse_entry = {"actions": []}
             if text:

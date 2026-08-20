@@ -704,6 +704,32 @@ perception.
 
   *(Guards: `tests/scope2/test_demo_recorder_perception.py` — 11, covering injection, the build/snapshot/release thread contract, loud failure, CDP fallback and the replay refusal; `tests/scope2/test_clean_demos_scope.py` — 9, pinning Scope #1's cleaning unchanged and covering the browser recording that used to clean down to nothing. Alongside the earlier `test_web_observer_aria_labelledby.py`, `test_web_observer_screen_coords.py`, `test_recorder_web_perception.py`, `test_grade_portal_plugin.py`. Full suite: 1215 passed, 11 skipped; the 30 failures in `test_executor_ghost_cursor.py` / `test_emergency_stop_hotkey.py` / `test_architecture_conformance.py` are pre-existing — verified identical, name for name, against a clean checkout of `dc09bb7`.)*
 
+  **EXTENDED 2026-08-21** — direct clarification from the user on what Scope #2 is: *"on our research we have 3 scopes, the 1st scope is notepad + data entry form, and the second one this is web portal grades from excel which I want you to implement. It can be different code but fundamentally the same from scope #1. Like the llm, recorder, etc."* So Scope #2 runs on **our** pipeline; the coworker's deterministic matcher stays as the ported comparison system, not as Scope #2's implementation.
+
+  **`run_scope2.py` — Scope #1's mirror.** Every scope-specific part goes through a constructor parameter `LLMAgent` already had:
+
+  | | Scope #1 | Scope #2 |
+  |---|---|---|
+  | `observer` | UIA tree | `WebObserver` (DOM over CDP) |
+  | `data_source` | `NotepadDataSource` | `GradeSheetSource` (.xlsx) |
+  | `scope` | `INSURANCE_SCOPE` | `GRADE_PORTAL_SCOPE` |
+  | `task_plugin` | `FormFillerPlugin` | `GradePortalPlugin` |
+
+  Zero agent edits — that is the thesis claim made concrete, and `test_run_scope2_wiring.py` guards it (if the entry point ever starts building its own executor or driving the browser itself, the claim is gone and the run would still work, so the failure would be invisible). A fresh data source per student, mirroring `run_agent.py`'s per-record construction: one shared source is a cache away from filling every row with the first student's grades. The countdown uses the same `COUNTDOWN_BEGIN`/`N`/`END` sentinels the Play panel already parses, with a hint line that is true for *this* workflow ("keep your hands off it") rather than Scope #1's "click the target window", which is actively wrong for a browser driven over CDP. Same `eval_metrics` at the end, so the two scopes are comparable at all.
+
+  **The copy-paste demo workflow**, raised directly by the user (*"the workflow should be I am copy pasting from the excel file cells right"*). It is legitimate — a demo teaches WHERE and click-vs-type, not how the value physically arrives, and at run time the agent never pastes: the source reads the cell and the executor types it. But the recorder counted the **three source-side actions per value** as demonstration steps, two of them as *fills*:
+  1. **The Excel click** — `WebObserver` reports its page no matter which window is in front, so the click was matched against the portal's element list and attributed to whatever input sat underneath it.
+  2. **Ctrl+C** — recorded as a hotkey step, and [transformer.py:421](components/intelligence/model/transformer.py#L421) folds every hotkey into `ACTION_KEYBOARD`, the type class.
+  3. **Alt+Tab** — nothing tracked alt, so the Tab half of an app switch arrived as a plain `"tab"` hotkey and became a fill too. (That one affects Scope #1 equally.)
+
+  Three corrupt steps for every two good ones, and nothing raised.
+
+  **Fixed generically: the observed window must be the foreground window at action time.** The foreground title is read in the input listener — the one place this file's "listeners never read state" rule does not apply, because that rule is about UIA walks holding the GIL and these are two cheap Win32 calls, and it *must* be read at event time since by the time the worker sees the event the demonstrator has switched back. UIA is unaffected by construction: it snapshots the foreground window, so its title *is* the foreground title and the rule can never fire on Scope #1. An unknown foreground (`""`, when Win32 can't answer) **keeps** the step — silently discarding an entire recording on a machine that can't answer the question is far worse than keeping a few source-side clicks. Alt is now tracked, and the pasted value finally reaches the trace: `_process_event` was already reading the clipboard and dropping it at the console log line, so a copy-paste demo recorded every value it entered as `""`.
+
+  **Real duplication found and removed.** Commit `a671bb7` added a second copy of the eight-variant mock portal at `components/scope2/mocksite/` — 13 files, identical to `practice_apps/mocksite/` except one docstring path. Nothing referenced it (`scanner.py`'s `MOCKSITE`, `make_sheets.py`, `verify_sheets.py` and the Electron `main.js` all point at `practice_apps/`), and `test_architecture_conformance.py` already asserts mocksite lives there — so the duplicate contradicted a guard that was passing. Verified byte-identical, then deleted.
+
+  *(Guards: `tests/scope2/test_recorder_copy_paste_demo.py` — 10; `tests/scope2/test_run_scope2_wiring.py` — 13. Full suite: 1238 passed, 11 skipped, same 31 pre-existing failures unchanged.)*
+
   **Not done, and it is the whole point: no demonstrations have been recorded yet.** That is a live run, which is the user's to execute. Until then `COLUMN_MAP` is still doing the work a learned mapping should do.
 
 ---
