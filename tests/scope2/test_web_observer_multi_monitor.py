@@ -156,3 +156,63 @@ def test_the_smallest_containing_element_wins():
         {"label": "cell", "bbox": [3200, 303, 3293, 337]},
     ]}
     assert _elem_under(state, [3250, 320])["label"] == "cell"
+
+# ── the ruler itself ─────────────────────────────────────────────────────────
+
+def test_dpi_module_imports_nothing_but_ctypes():
+    """The whole point of the module. Awareness can only be claimed once per
+    process and the first claim wins - something in the ordinary import chain
+    already claims SYSTEM. A heavier import here would reintroduce exactly the
+    race this exists to win."""
+    import ast
+
+    src = (REPO / "components" / "dpi.py").read_text(encoding="utf-8")
+    imported = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert imported <= {"ctypes", "__future__"}, imported
+
+
+def test_the_process_running_the_tests_can_report_its_awareness():
+    import dpi
+
+    assert dpi.current() in (dpi.UNAWARE, dpi.SYSTEM, dpi.PER_MONITOR)
+    assert dpi.ensure_per_monitor() in (dpi.UNAWARE, dpi.SYSTEM, dpi.PER_MONITOR)
+
+
+def test_the_recorder_entry_point_claims_awareness_before_it_imports_anything():
+    """Order is the entire fix. If dpi.ensure_per_monitor() ever slides below
+    the project imports, the claim silently loses and clicks resolve to the
+    wrong column again - with no error, which is how it got through the first
+    time."""
+    src = (REPO / "scripts" / "record_trace.py").read_text(encoding="utf-8")
+    claim = src.index("_dpi.ensure_per_monitor()")
+    for later in ("from recorder.recorder import", "import argparse"):
+        assert claim < src.index(later), f"{later} is imported before the DPI claim"
+
+
+def test_the_scope2_run_entry_does_the_same():
+    src = (REPO / "run_scope2.py").read_text(encoding="utf-8")
+    claim = src.index("_dpi.ensure_per_monitor()")
+    assert claim < src.index("import logging")
+
+
+def test_the_observer_says_so_when_it_lost_the_race(caplog, monkeypatch):
+    """Losing is not fatal, but it is the exact condition where rectangles and
+    clicks stop describing the same space, so it must not pass in silence."""
+    import logging
+    import dpi as dpi_mod
+
+    from observers.web_observer import web_observer as wo
+
+    monkeypatch.setattr(dpi_mod, "ensure_per_monitor", lambda: dpi_mod.SYSTEM)
+    monkeypatch.setattr(dpi_mod, "virtual_desktop", lambda: (3456, 1080))
+    with caplog.at_level(logging.WARNING):
+        wo._ensure_dpi_aware()
+
+    warned = " ".join(r.getMessage() for r in caplog.records)
+    assert "per-monitor" in warned and "3456" in warned
+

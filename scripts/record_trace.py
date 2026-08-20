@@ -21,6 +21,15 @@ Examples:
     python scripts/record_trace.py --duration 30
 """
 
+# DPI awareness must be claimed before the import chain does it for us -
+# see components/dpi.py. sys.path is not set up yet, so this reaches
+# components/ directly rather than importing anything of ours.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                 "..", "components"))
+import dpi as _dpi
+_dpi.ensure_per_monitor()
+
 import argparse
 import sys
 import os

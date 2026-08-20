@@ -41,6 +41,15 @@ os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
 os.environ.setdefault("HF_HUB_VERBOSITY", "error")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
 
+# DPI awareness must be claimed before the import chain does it for us -
+# see components/dpi.py. sys.path is not set up yet, so this reaches
+# components/ directly rather than importing anything of ours.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                 "components"))
+import dpi as _dpi
+_dpi.ensure_per_monitor()
+
 import argparse
 import datetime as _datetime
 import json

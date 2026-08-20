@@ -58,6 +58,31 @@ _INTERACTIVE_ROLES = {
 }
 
 
+def _ensure_dpi_aware() -> None:
+    """Claim per-monitor DPI awareness, and say so loudly when it is too late.
+
+    See components/dpi.py for why this must happen before the import chain gets
+    a chance to claim SYSTEM awareness. Losing that race is not fatal, but it is
+    the exact condition under which element rectangles and recorded clicks stop
+    describing the same space, so it must not pass in silence.
+    """
+    try:
+        import dpi
+    except Exception:
+        return
+
+    level = dpi.ensure_per_monitor()
+    if level == dpi.PER_MONITOR:
+        return
+    logger.warning(
+        "WebObserver: this process is %s DPI-aware, not per-monitor - something "
+        "claimed awareness before we could. On a display running above 100%%, "
+        "element rectangles and mouse coordinates will describe different "
+        "spaces and clicks will resolve to the wrong element. Call "
+        "dpi.ensure_per_monitor() as the first line of the entry point. "
+        "Desktop reported as %sx%s.", level, *dpi.virtual_desktop())
+
+
 class WebObserver:
     """
     Observes browser state via Playwright.
@@ -116,6 +141,9 @@ class WebObserver:
         if not _PLAYWRIGHT_AVAILABLE:
             logger.warning("WebObserver: playwright not installed. Run: pip install playwright && playwright install chromium")
             return False
+        # Before any rectangle is read, and only in processes that actually use
+        # this observer - scope #1's UIA path is left exactly as it was.
+        _ensure_dpi_aware()
         try:
             self._pw = sync_playwright().start()
             if self.browser_url:
