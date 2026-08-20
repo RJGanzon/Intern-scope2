@@ -146,6 +146,85 @@ def test_the_portal_fills_remarks_without_being_typed_into(session):
         assert el["value"] not in typed, "Remarks was typed, not derived"
 
 
+# ── continuing a human demonstration ─────────────────────────────────────────
+
+NAMES_TO_KEYS = {
+    "Course Abad, Andrea A.": "course", "Year 1-5 Abad, Andrea A.": "year",
+    "Grade 0-100 Abad, Andrea A.": "grade",
+    "Course Aguilar, Benjamin L.": "course", "Year 1-5 Aguilar, Benjamin L.": "year",
+    "Grade 0-100 Aguilar, Benjamin L.": "grade",
+}
+
+
+def fake_human_session(tmp_path, sequence):
+    """A recorded session that clicked these cells, in this order."""
+    session = tmp_path / "session_20260821_000000"
+    session.mkdir(parents=True, exist_ok=True)
+    boxes = {name: [i * 100, 0, i * 100 + 50, 20]
+             for i, name in enumerate(NAMES_TO_KEYS)}
+    state = {"elements": [{"label": name, "bbox": box, "type": "editcontrol"}
+                          for name, box in boxes.items()]}
+    for i, name in enumerate(sequence):
+        box = boxes[name]
+        step = {"state": state, "next_state": state,
+                "mouse": {"actions": [{"type": "click",
+                                       "position": [box[0] + 5, 10]}]},
+                "keyboard": {"actions": []}}
+        (session / f"live_step_{i:04d}.json").write_text(json.dumps(step), encoding="utf-8")
+    return str(session)
+
+
+def test_the_column_order_is_read_off_the_demonstration(tmp_path):
+    """The whole point: the order is the human's, not the flag's default."""
+    session = fake_human_session(tmp_path, [
+        "Grade 0-100 Abad, Andrea A.",
+        "Course Abad, Andrea A.",
+        "Year 1-5 Abad, Andrea A.",
+    ])
+    order, _ = gen.infer_pattern(session, NAMES_TO_KEYS)
+    assert order == ["grade", "course", "year"]
+
+
+def test_the_students_already_covered_are_recognised(tmp_path):
+    session = fake_human_session(tmp_path, [
+        "Course Abad, Andrea A.", "Course Aguilar, Benjamin L.",
+    ])
+    _, students = gen.infer_pattern(session, NAMES_TO_KEYS)
+    assert students == ["Abad, Andrea A.", "Aguilar, Benjamin L."]
+
+
+def test_a_session_whose_clicks_resolve_to_nothing_yields_no_order(tmp_path):
+    """The broken recordings looked exactly like this - full states, real window,
+    and not one click on an element. Building on one would produce a dataset with
+    a fill order nobody chose."""
+    session = tmp_path / "session_broken"
+    session.mkdir()
+    state = {"elements": [{"label": "Course Abad, Andrea A.", "bbox": [0, 0, 50, 20]}]}
+    step = {"state": state, "next_state": state,
+            "mouse": {"actions": [{"type": "click", "position": [9999, 9999]}]},
+            "keyboard": {"actions": []}}
+    (session / "live_step_0000.json").write_text(json.dumps(step), encoding="utf-8")
+
+    order, _ = gen.infer_pattern(str(session), NAMES_TO_KEYS)
+    assert order == []
+
+
+def test_demonstrated_rows_are_generated_too_by_default():
+    """The mistake this default exists to prevent, kept as a test because the
+    symptom pointed nowhere near the cause. Skipping the demonstrated rows meant
+    every training state had rows 0-3 empty while filling started at row 4 - and
+    the human session to score against is exactly rows 0-3 filling from an empty
+    sheet. The model collapsed to one constant prediction, 0/12, while reporting
+    0.93 click accuracy on its own validation split."""
+    assert gen.parse_args([]).skip_demonstrated is False
+    assert gen.parse_args(["--skip-demonstrated"]).skip_demonstrated is True
+
+
+def test_the_session_records_which_demonstration_it_came_from(tmp_path):
+    writer = gen.SessionWriter(str(tmp_path), {"index": 0, "derived_from": "session_x"})
+    assert writer.meta["derived_from"] == "session_x"
+
+
 # ── the data says what it is ─────────────────────────────────────────────────
 
 def test_every_single_step_is_marked_generated(session):

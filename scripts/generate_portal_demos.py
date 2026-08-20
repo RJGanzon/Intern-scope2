@@ -94,6 +94,20 @@ def parse_args(argv=None):
                          "where it is visible, not by writing into the same folder.")
     ap.add_argument("--order", default="course,year,grade",
                     help="Column fill order within a row. The model clones this.")
+    ap.add_argument("--from-demo", dest="from_demo", default=None,
+                    help="A recorded human session to continue. The column order "
+                         "is read off that demonstration instead of --order, and "
+                         "the students it already covers are skipped, so the "
+                         "generated rows extend the same pattern rather than "
+                         "inventing one. This is the honest way to turn ten "
+                         "recorded rows into a trainable dataset.")
+    ap.add_argument("--skip-demonstrated", action="store_true",
+                    help="With --from-demo, leave out the rows the human already "
+                         "covered. Off by default, and read the note it prints "
+                         "before turning it on: excluding them means the sheet "
+                         "never starts empty in training, and the human session "
+                         "you would score against is exactly the sheet starting "
+                         "empty.")
     ap.add_argument("--row-order", default="top-down",
                     choices=["top-down", "bottom-up", "shuffled"],
                     help="Order the rows are visited in.")
@@ -152,6 +166,95 @@ def element_for(state, label):
     return None
 
 
+def cell_names(page):
+    """{accessible name: column key} for every editable cell on the page.
+
+    Built from the live page, so it is exact rather than parsed out of a label:
+    a variant that renames Grade to "Final Rating 0-100" renames the names here
+    too, and a demonstration recorded against it still resolves.
+    """
+    return page.evaluate(
+        r"""() => {
+            const clean = (s) => (s || "").replace(/\s+/g, " ").trim();
+            const name = (el) => {
+              const ids = (el.getAttribute("aria-labelledby") || "")
+                            .split(/\s+/).filter(Boolean);
+              if (ids.length) {
+                return ids.map((i) => { const n = document.getElementById(i);
+                                        return n ? clean(n.textContent) : ""; })
+                          .filter(Boolean).join(" ");
+              }
+              return clean(el.getAttribute("aria-label"));
+            };
+            const out = {};
+            document.querySelectorAll(
+                "#records-body input[data-key], #records-body select[data-key], "
+                + "#records-body textarea[data-key]")
+              .forEach(el => { const n = name(el); if (n) out[n] = el.dataset.key; });
+            return out;
+        }""")
+
+
+def infer_pattern(session_dir, names_to_keys):
+    """What order did the human actually fill a row in, and how far did they get?
+
+    Read off the demonstration rather than assumed, because the whole reason to
+    do this is that the order is theirs. Each click is resolved to the cell that
+    was under it - the same resolution the cleaner and the trainer use - and the
+    order columns first appear within a student is the pattern to continue.
+
+    Returns (column order, student names already demonstrated).
+    """
+    import glob as _glob
+
+    order, seen_students = [], []
+    for path in sorted(_glob.glob(os.path.join(session_dir, "live_step_*.json"))):
+        with open(path, encoding="utf-8") as fh:
+            step = json.load(fh)
+        actions = step.get("mouse", {}).get("actions", [])
+        if not actions or actions[0].get("type") not in ("click", "double_click"):
+            continue
+        target = _under(step.get("state", {}), actions[0].get("position") or [0, 0])
+        label = (target or {}).get("label") or ""
+        key = names_to_keys.get(label)
+        if not key:
+            continue
+        if key not in order:
+            order.append(key)
+        student = label[len(_column_prefix(label, names_to_keys)):].strip()
+        if student and student not in seen_students:
+            seen_students.append(student)
+    return order, seen_students
+
+
+def _column_prefix(label, names_to_keys):
+    """The column half of "Grade 0-100 Abad, Andrea A.".
+
+    Taken as the prefix shared by every cell of that column, then cut back to
+    the last word boundary. The cut is the part that matters: "Course Abad..."
+    and "Course Aguilar..." share "Course A", so the raw common prefix eats the
+    first letter of the name and leaves "bad, Andrea A." as the student.
+    """
+    key = names_to_keys.get(label)
+    same_column = [n for n, k in names_to_keys.items() if k == key]
+    if len(same_column) < 2:
+        return ""
+    prefix = os.path.commonprefix(same_column)
+    cut = prefix.rfind(" ")
+    return prefix[:cut + 1] if cut >= 0 else prefix
+
+
+def _under(state, pos):
+    best, area = None, float("inf")
+    for el in state.get("elements") or []:
+        box = el.get("bbox") or []
+        if len(box) == 4 and box[0] <= pos[0] <= box[2] and box[1] <= pos[1] <= box[3]:
+            a = (box[2] - box[0]) * (box[3] - box[1])
+            if a < area:
+                best, area = el, a
+    return best
+
+
 def centre(bbox):
     return [float((bbox[0] + bbox[2]) / 2), float((bbox[1] + bbox[3]) / 2)]
 
@@ -198,6 +301,8 @@ def generate_session(observer, page, source, args, index, students):
         "seed": args.seed,
         "sheet": os.path.basename(args.sheet),
         "script": "scripts/generate_portal_demos.py",
+        "derived_from": (os.path.basename(args.from_demo.rstrip("/\\"))
+                         if args.from_demo else None),
     }
     writer = SessionWriter(args.out, meta)
     columns = [c.strip() for c in args.order.split(",") if c.strip()]
@@ -286,6 +391,43 @@ def main(argv=None):
     try:
         page = observer._page
         page.wait_for_selector("#records-body tr")
+
+        if args.from_demo:
+            demo = args.from_demo
+            if not os.path.isabs(demo):
+                demo = os.path.join(_ROOT, demo)
+            if not os.path.isdir(demo):
+                raise SystemExit(f"no such session: {demo}")
+
+            order, demonstrated = infer_pattern(demo, cell_names(page))
+            if not order:
+                raise SystemExit(
+                    f"could not read a fill order out of {os.path.basename(demo)} - "
+                    "no click in it resolved to a cell. That session is the one "
+                    "with the coordinate problem; check it with the clicks-landing "
+                    "count before building on it.")
+            args.order = ",".join(order)
+            print(f"read from {os.path.basename(demo)}:")
+            print(f"  column order   {' -> '.join(order)}")
+            print(f"  already shown  {len(demonstrated)} student(s): "
+                  f"{', '.join(demonstrated[:3])}"
+                  f"{' ...' if len(demonstrated) > 3 else ''}")
+            # The demonstrated rows are generated too, and skipping them was a
+            # real mistake worth recording. Starting generation at row 4 meant
+            # every training state had rows 0-3 empty while filling began
+            # further down - and the human session is precisely rows 0-3 filling
+            # from an empty sheet, a situation the model then never saw. Scored
+            # against that session it collapsed to one constant prediction,
+            # 0/12, despite 0.93 click accuracy on its own validation split.
+            # A demonstration is a pattern to continue, not a range to avoid.
+            if args.skip_demonstrated:
+                rows[:] = [r for r in rows if r >= len(demonstrated)]
+                print("  NOTE: --skip-demonstrated leaves the demonstrated rows "
+                      "out of training. The sheet then never starts empty, so a "
+                      "session that does is out of distribution.")
+            print(f"  generating     rows {rows[0]}-{rows[-1]} in that same order")
+            print()
+
         for i in range(args.sessions):
             writer = generate_session(observer, page, source, args, i, rows)
             print(f"session {i + 1}/{args.sessions}: {writer.n} steps -> {writer.dir}")
