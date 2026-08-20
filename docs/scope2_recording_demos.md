@@ -294,9 +294,23 @@ learned, which a single accuracy number never does.
 
 ## 10. Run it
 
-```bash
+Watching it work is the point of this step, so keep the portal visible and in
+front, and keep your hands off the mouse — the agent drives the real cursor.
+**Ctrl+Alt+K** force-kills a run at any time.
+
+```powershell
+# Before a model exists: the plugin drives, nothing is trained or inferred.
+python run_scope2.py --records 0-4 --provider none
+
+# With a trained checkpoint.
 python run_scope2.py --records 0-4 --model tasks/grade_portal/model.pt
 ```
+
+`--provider none` is what makes the first form work: the agent refuses to start
+without a checkpoint otherwise, on the grounds that a missing one silently
+turns every step into an ungrounded LLM guess. With no provider and no model,
+`GradePortalPlugin` handles the steps itself — enough to watch the portal fill
+before any training has happened.
 
 Once the model is good, drop the hand-written helper and run the same shape
 Scope #1 uses — transformer for *where*, LLM for *what*:

@@ -181,6 +181,19 @@ def test_the_browser_is_released_even_when_the_run_raises(monkeypatch, capsys):
     assert seen["disconnected"], "a crashed run left the CDP session open"
 
 
+def test_the_kill_switch_is_armed_before_the_agent_is_imported():
+    """This agent drives the real mouse, so a run with no failsafe is one you
+    cannot stop by hand. Order matters as much as presence: importing
+    agent.agent pulls in torch and runs to completion before the next line of
+    this file does, which in run_task.py once left a real 23-second window with
+    nothing armed. Hence the agent import lives inside main()."""
+    src = (REPO / "run_scope2.py").read_text(encoding="utf-8")
+
+    armed = src.index("start_emergency_stop_listener()")
+    assert armed < src.index("raise SystemExit(main())")
+    assert "from agent.agent import LLMAgent" in src.split("def main(")[1],         "the agent import escaped main() and now runs before the kill switch"
+
+
 def test_a_missing_sheet_stops_before_touching_the_browser(monkeypatch):
     """Failing here costs nothing; failing after attaching leaves a browser
     session open and a countdown already spent."""

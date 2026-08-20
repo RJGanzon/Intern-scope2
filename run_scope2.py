@@ -292,4 +292,16 @@ def _report(results, args):
 
 
 if __name__ == "__main__":
+    # Armed before main(), and before the imports main() performs. This agent
+    # drives the real mouse, so a run with no kill switch is a run you cannot
+    # stop by hand. run_task.py records why the ORDER matters and not just the
+    # placement: `from agent.agent import LLMAgent` pulls in torch and runs to
+    # completion before the next line of this file does, which once left a real
+    # 23-second window with no failsafe armed at all. main() defers that import
+    # for the same reason.
+    from agent.emergency_stop import start_emergency_stop_listener, HOTKEY_LABEL
+
+    start_emergency_stop_listener()
+    _flush_safe_print(f"[EMERGENCY STOP] Press {HOTKEY_LABEL} at any time to "
+                      f"force-kill this run.")
     raise SystemExit(main())
