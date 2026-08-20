@@ -254,6 +254,11 @@ each is now closed with a verification that guards against regression.
 
 ## Quick Start
 
+> Recording demos for Scope #2 (grade sheet → web portal) has its own
+> step-by-step guide: [docs/scope2_recording_demos.md](docs/scope2_recording_demos.md).
+> Several of its setup rules fail silently rather than erroring, so read it
+> before the first session rather than after.
+
 ```bash
 # 1. Install Python deps (Windows; UIA + pyautogui are Win-specific)
 pip install -r requirements.txt
