@@ -126,6 +126,17 @@ def parse_args(argv=None):
                          "empty sheet and walks the roster in order, and 'which "
                          "row next' can be answered by counting steps instead of "
                          "reading the page - which is what a model will do.")
+    ap.add_argument("--skip-prob", type=float, default=0.0,
+                    help="Chance of leaving a row unfilled, per row. Gaps are the "
+                         "point: with every session filling every row in order, "
+                         "'which row next' is answerable by counting steps, and a "
+                         "model will memorise the trajectory instead of reading "
+                         "the page. A random split cannot detect that - validation "
+                         "rows sit beside training rows from the same pass - so it "
+                         "reports 93% while the same model scores 24% on a human "
+                         "recording. Gaps force the target to be found in the "
+                         "state, which is also what the agent must do when it "
+                         "resumes a half-finished sheet.")
     ap.add_argument("--seed", type=int, default=None,
                     help="Only used by --row-order shuffled; recorded in the session.")
     ap.add_argument("--browser-url", dest="browser_url", default=None,
@@ -326,6 +337,7 @@ def generate_session(observer, page, source, args, index, students):
         "seed": args.seed,
         "sheet": os.path.basename(args.sheet),
         "prefill": _prefill_for(args, index),
+        "skip_prob": args.skip_prob,
         "script": "scripts/generate_portal_demos.py",
         "derived_from": (os.path.basename(args.from_demo.rstrip("/\\"))
                          if args.from_demo else None),
@@ -351,6 +363,10 @@ def generate_session(observer, page, source, args, index, students):
             if ids.get(col) and value is not None:
                 page.locator(f"#{ids[col]}").fill(str(value))
     remaining = students[prefill:]
+    skip_prob = float(meta.get("skip_prob") or 0.0)
+    if skip_prob > 0:
+        rng = random.Random(f"{meta.get('seed')}-{meta['index']}")
+        remaining = [r for r in remaining if rng.random() >= skip_prob]
 
     state = observer.snapshot()
     for row in remaining:

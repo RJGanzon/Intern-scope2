@@ -181,6 +181,57 @@ def test_the_browser_is_released_even_when_the_run_raises(monkeypatch, capsys):
     assert seen["disconnected"], "a crashed run left the CDP session open"
 
 
+def test_the_loaded_model_is_asked_for_rather_than_guessed(monkeypatch):
+    """The provider default for lmstudio is the literal "local-model", which LM
+    Studio answers with HTTP 400 - and _ask_llm swallows every exception into
+    {"action_type": "wait"}. A run against a healthy server would do nothing at
+    all, for every step, in silence. Measured on a real server: "local-model"
+    -> 400, "google/gemma-3-4b" -> a normal reply."""
+    import json
+    import io as _io
+
+    payload = {"data": [{"id": "text-embedding-nomic-embed-text-v1.5"},
+                        {"id": "google/gemma-3-4b"}]}
+
+    class _Response:
+        def __enter__(self):
+            return _io.StringIO(json.dumps(payload))
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Response())
+    # The embedding model answers /v1/models identically and cannot answer a
+    # chat completion, so picking it would reproduce the same silent failure.
+    assert run_scope2.discover_llm_model("http://localhost:1234/v1") == "google/gemma-3-4b"
+
+
+def test_an_unreachable_llm_server_does_not_stop_the_run(monkeypatch):
+    """Discovery failing is not fatal - the run still starts and the provider
+    default applies. It is logged, because that is the state where every step
+    silently becomes 'wait'."""
+    def boom(*a, **k):
+        raise OSError("refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", boom)
+    assert run_scope2.discover_llm_model("http://localhost:1234/v1") is None
+
+
+def test_a_server_with_only_an_embedding_model_is_reported(monkeypatch):
+    import json
+    import io as _io
+
+    class _Response:
+        def __enter__(self):
+            return _io.StringIO(json.dumps({"data": [{"id": "nomic-embed-text"}]}))
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _Response())
+    assert run_scope2.discover_llm_model("http://localhost:1234/v1") is None
+
+
 def test_the_kill_switch_is_armed_before_the_agent_is_imported():
     """This agent drives the real mouse, so a run with no failsafe is one you
     cannot stop by hand. Order matters as much as presence: importing

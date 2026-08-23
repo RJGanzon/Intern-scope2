@@ -156,6 +156,10 @@ def parse_args(argv=None):
                          "falls back the same way it does for scope #1.")
     ap.add_argument("--provider", default=PROVIDER,
                     choices=["anthropic", "groq", "gemini", "lmstudio", "none"])
+    ap.add_argument("--llm-model", default=None,
+                    help="Model id to ask the LLM server for. Default: whatever "
+                         "LM Studio actually has loaded, discovered at startup.")
+    ap.add_argument("--lmstudio-url", default="http://localhost:1234/v1")
     ap.add_argument("--max-steps", type=int, default=MAX_STEPS)
     ap.add_argument("--step-delay", type=float, default=STEP_DELAY)
     ap.add_argument("--max-elements", type=int, default=1000,
@@ -165,6 +169,40 @@ def parse_args(argv=None):
                          "run_task.py uses. Needs a trained checkpoint to be useful.")
     ap.add_argument("--countdown", type=int, default=5)
     return ap.parse_args(argv)
+
+
+def discover_llm_model(url, timeout=5.0):
+    """Ask the server what it has loaded, rather than guessing a name.
+
+    The default for lmstudio is the literal string "local-model", which LM
+    Studio rejects with HTTP 400 - and _ask_llm catches every exception and
+    returns {"action_type": "wait"}, so a run against a perfectly healthy
+    server does nothing at all, for every step, in silence. Measured directly:
+    "local-model" -> 400, "google/gemma-3-4b" -> a normal reply.
+
+    Embedding models are skipped: they are loaded alongside chat models and
+    answer /v1/models identically, but cannot answer a chat completion.
+    """
+    import json as _json
+    import urllib.request as _req
+
+    try:
+        with _req.urlopen(f"{url.rstrip('/')}/models", timeout=timeout) as response:
+            data = _json.load(response)
+    except Exception as exc:
+        logger.warning("Could not ask %s what it has loaded (%s). Falling back to "
+                       "the provider default, which LM Studio may refuse.", url, exc)
+        return None
+
+    ids = [m.get("id", "") for m in data.get("data", [])]
+    chat = [i for i in ids if i and "embed" not in i.lower()]
+    if not chat:
+        logger.warning("%s has no chat model loaded (saw %s). Every LLM call will "
+                       "fail and every step will come back as 'wait'.", url, ids)
+        return None
+    if len(chat) > 1:
+        logger.info("Several models loaded (%s); using the first.", chat)
+    return chat[0]
 
 
 def build_observer(args):
@@ -207,6 +245,12 @@ def main(argv=None) -> int:
                or os.environ.get("GROQ_API_KEY", "")
                or os.environ.get("GEMINI_API_KEY", ""))
 
+    llm_model = args.llm_model
+    if args.provider == "lmstudio" and not llm_model:
+        llm_model = discover_llm_model(args.lmstudio_url)
+    if llm_model:
+        logger.info("LLM model: %s", llm_model)
+
     print_countdown(args.countdown)
 
     all_results = []
@@ -237,6 +281,8 @@ def main(argv=None) -> int:
                 goal=GOAL,
                 provider=args.provider,
                 api_key=api_key,
+                model_id=llm_model,
+                lmstudio_url=args.lmstudio_url,
                 task_plugin=plugin,
                 pure_transformer=False,
                 disable_auto_handlers=True,
