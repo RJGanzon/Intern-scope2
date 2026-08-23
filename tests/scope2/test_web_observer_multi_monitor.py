@@ -58,13 +58,20 @@ def observer(rect=None, virtual=None, title="Grade Encoding Portal"):
     return obs
 
 
+# The rectangle really measured on the operator's machine, paired with the
+# viewport that actually produces it: 767 x 730 at scale 1. Earlier revisions of
+# these tests paired this rect with inner dimensions borrowed from another
+# fixture - a window no display could produce. Harmless until the identity check
+# below arrived and correctly rejected all three.
+REAL_RECT = {"left": 2689.0, "top": 86.0, "right": 3456.0, "bottom": 816.0}
+REAL_VIEWPORT = {"innerWidth": 767, "innerHeight": 730}
+
+
 # ── the fix ──────────────────────────────────────────────────────────────────
 
 def test_the_origin_is_the_content_rect_windows_reports():
     """No arithmetic on screenX at all when Windows can answer."""
-    rect = {"left": 2689.0, "top": 86.0, "right": 3456.0, "bottom": 816.0}
-    origin = observer(rect).\
-        _screen_origin(FakePage())
+    origin = observer(REAL_RECT)._screen_origin(FakePage(**REAL_VIEWPORT))
 
     assert origin["source"] == "win32"
     assert (origin["dx"], origin["dy"]) == (2689.0, 86.0)
@@ -74,7 +81,8 @@ def test_the_scale_is_measured_rather_than_taken_from_the_dom():
     """width / innerWidth includes page zoom for free, which devicePixelRatio
     alone does not describe once the user has zoomed."""
     rect = {"left": 1000.0, "top": 100.0, "right": 2084.0, "bottom": 900.0}
-    origin = observer(rect)._screen_origin(FakePage(innerWidth=542))
+    origin = observer(rect)._screen_origin(
+        FakePage(innerWidth=542, innerHeight=400))    # a measured 1084 x 800
     assert origin["dpr"] == 2.0          # 1084 measured / 542 reported
 
 
@@ -82,8 +90,8 @@ def test_screen_resolution_covers_every_monitor():
     """It normalises click coordinates. A browser on a second monitor has
     coordinates past the primary's width, and dividing those by one monitor's
     size puts them outside 0..1."""
-    rect = {"left": 2689.0, "top": 86.0, "right": 3456.0, "bottom": 816.0}
-    origin = observer(rect, virtual={"width": 3456, "height": 1080})._screen_origin(FakePage())
+    origin = observer(REAL_RECT, virtual={"width": 3456, "height": 1080}) \
+        ._screen_origin(FakePage(**REAL_VIEWPORT))
     assert (origin["screen_width"], origin["screen_height"]) == (3456, 1080)
 
 
@@ -94,8 +102,31 @@ def test_a_stub_sized_rect_is_refused():
     2x2 pixels. Taking one collapsed every bbox onto a 2-pixel square - and,
     again, raised nothing."""
     stub = {"left": 3090.0, "top": 85.0, "right": 3092.0, "bottom": 87.0}
-    origin = observer(stub)._screen_origin(FakePage())
+    origin = observer(stub)._screen_origin(FakePage(**REAL_VIEWPORT))
     assert origin["source"] == "dom", "a 2x2 rect was accepted as a viewport"
+
+
+def test_a_window_that_is_not_this_viewport_is_refused():
+    """A page title is not unique. Generating data headless - no window of its
+    own - the lookup found the OPERATOR's browser showing the same portal and
+    paired its position with the headless viewport's size. Cells came out 161x26
+    where the real ones were 81x43, and the model trained on it scored 96% on
+    its own data and 48% on a human recording. A window that really is this
+    viewport scales the same in both axes; that pair scaled 0.75 across and
+    1.27 down."""
+    other_browser = {"left": 2881.0, "top": 108.0, "right": 3840.0, "bottom": 1020.0}
+    origin = observer(other_browser)._screen_origin(
+        FakePage(innerWidth=1280, innerHeight=720))
+    assert origin["source"] == "dom", "another browser's window was accepted"
+
+
+def test_a_window_that_scales_evenly_is_accepted():
+    """The real case must still pass: one scale factor, both axes."""
+    rect = {"left": 100.0, "top": 100.0, "right": 100 + 1280 * 1.25,
+            "bottom": 100 + 720 * 1.25}
+    origin = observer(rect)._screen_origin(FakePage(innerWidth=1280, innerHeight=720))
+    assert origin["source"] == "win32"
+    assert abs(origin["dpr"] - 1.25) < 0.001
 
 
 # ── the fallback, and its known limit ────────────────────────────────────────

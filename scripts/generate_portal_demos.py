@@ -128,6 +128,16 @@ def parse_args(argv=None):
                          "reading the page - which is what a model will do.")
     ap.add_argument("--seed", type=int, default=None,
                     help="Only used by --row-order shuffled; recorded in the session.")
+    ap.add_argument("--browser-url", dest="browser_url", default=None,
+                    help="Generate inside a browser that is ALREADY open, over CDP "
+                         "(e.g. http://localhost:9222) - normally the same window "
+                         "the demonstration was recorded in. Geometry then matches "
+                         "the recording by construction: same monitor, same window "
+                         "size, same cell rectangles. A browser this script launches "
+                         "itself opens wherever Windows puts it, at its own size, so "
+                         "its cells land in a region of the screen the recording "
+                         "never touches - self-consistent data that does not "
+                         "resemble the human's.")
     ap.add_argument("--headed", action="store_true",
                     help="Drive a visible browser. Slower, but the window has a real "
                          "screen position, so bboxes come out in the same coordinate "
@@ -415,8 +425,13 @@ def main(argv=None):
     elif args.row_order == "shuffled":
         random.Random(args.seed).shuffle(rows)
 
-    observer = WebObserver(headless=not args.headed)
-    if not observer.connect(variant_url(args.variant)):
+    if args.browser_url:
+        observer = WebObserver(browser_url=args.browser_url)
+        connected = observer.connect()          # the page it is already showing
+    else:
+        observer = WebObserver(headless=not args.headed)
+        connected = observer.connect(variant_url(args.variant))
+    if not connected:
         raise SystemExit("could not open the portal")
 
     try:

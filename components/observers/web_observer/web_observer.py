@@ -388,7 +388,30 @@ class WebObserver:
             return None
 
         inner_w = float(geometry.get("innerWidth") or 0)
+        inner_h = float(geometry.get("innerHeight") or 0)
         rect = self._content_rect_win32(self._page_title_cache) if inner_w else None
+
+        # Is that window actually OURS? The lookup matches on page title, and a
+        # title is not unique: a headless browser has no window at all, so the
+        # search found a DIFFERENT browser showing the same page - the
+        # operator's - and paired its position with the headless viewport's
+        # size. Generated cells came out 161x26 where the real ones were 81x43,
+        # a hybrid of two browsers that looked entirely plausible and trained a
+        # model that scored 96% on its own data and 48% on a human recording.
+        #
+        # A window that really is this viewport scales the same in both axes.
+        # The mismatched pair scaled 0.75 across and 1.27 down, which no display
+        # does.
+        if rect and inner_h:
+            sx = (rect["right"] - rect["left"]) / inner_w
+            sy = (rect["bottom"] - rect["top"]) / inner_h
+            if sx <= 0 or sy <= 0 or abs(sx - sy) > 0.05 * max(sx, sy):
+                logger.warning(
+                    "WebObserver: window %s scales %.2fx across and %.2fx down - "
+                    "that is not this viewport, most likely another browser "
+                    "showing the same page. Falling back to DOM geometry.",
+                    rect, sx, sy)
+                rect = None
         # Checked here as well as inside the lookup: this is the point of use,
         # and a rect a few pixels across would collapse every bbox onto a dot
         # rather than fail, whichever source produced it.
