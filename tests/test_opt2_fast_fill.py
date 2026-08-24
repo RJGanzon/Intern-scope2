@@ -456,18 +456,34 @@ class TestBatchFastFill:
         assert '_bf_ty == "comboboxcontrol"' in window
         assert '_bf_ty in ("checkboxcontrol", "checkbox")' in window
 
+    @staticmethod
+    def _branch(window, start_marker, end_marker):
+        """One type's branch, bounded by where the next one begins.
+
+        These slices used to be a fixed character count from the branch start,
+        which silently stops testing what it names as soon as the branch grows:
+        adding a comment ahead of the fill pushed the very line being asserted
+        out of the window, and the failure read as "direct_fill_hwnd is missing"
+        when it was still right there. Bounding on the next branch keeps the
+        assertion about the branch rather than about its length.
+        """
+        start = window.index(start_marker)
+        end = window.index(end_marker, start)
+        assert end > start, "branch markers out of order"
+        return window[start:end]
+
     def test_editcontrol_uses_direct_fill_hwnd_no_click(self):
         window = self._batch_window()
-        idx = window.index('_bf_ty == "editcontrol"')
-        section = window[idx:idx + 3400]
+        section = self._branch(window, '_bf_ty == "editcontrol"',
+                               '_bf_ty == "comboboxcontrol"')
         assert '"direct_fill_hwnd": _bf_hwnd' in section
         assert '"action_type": "click"' not in section
         assert "_bf_ctrl.SetFocus()" in section
 
     def test_comboboxcontrol_uses_combobox_select_and_checks_success(self):
         window = self._batch_window()
-        idx = window.index('_bf_ty == "comboboxcontrol"')
-        section = window[idx:idx + 2400]
+        section = self._branch(window, '_bf_ty == "comboboxcontrol"',
+                               '_bf_ty in ("checkboxcontrol"')
         assert '"action_type": "combobox_select"' in section
         assert '"combobox_hwnd": _bf_hwnd' in section
         assert "_bf_cb_result.success" in section

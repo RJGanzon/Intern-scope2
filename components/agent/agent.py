@@ -2450,6 +2450,24 @@ class LLMAgent:
                         # result costs no more than what the reactive path
                         # was already paying for the SAME field -- this
                         # just skips the transformer call in front of it.
+                        # A source that cannot identify this field is not
+                        # saying it is blank - it is saying it does not know,
+                        # and those must not be collapsed. Scope #1 never had to
+                        # tell them apart: a Notepad record's keys ARE the form's
+                        # labels, so a miss really did mean blank. Scope #2 asks
+                        # a grade book for "Course Abad, Andrea A." while its
+                        # columns are PROGRAM and FINAL GRADE - so every field
+                        # missed, every one was ruled confirmed-blank, and a live
+                        # run tabbed past 109 of them without filling one. Left
+                        # unmarked and unfilled, the field stays visible and
+                        # empty for the transformer/LLM path below, which is
+                        # where deciding what a portal column wants from a record
+                        # in another vocabulary belongs.
+                        if not self._source_knows(_bf_label):
+                            logger.info("[OPT2] batch fast-fill '%s' -> the data source "
+                                        "does not recognise this field; leaving it for "
+                                        "the transformer/LLM", _bf_label)
+                            continue
                         _bf_val = self._resolve_field_value_with_escalation(state, _bf_label, section=_bf_sec)
                         if not _bf_val:
                             logger.info("[OPT2] batch fast-fill '%s' → confirmed blank, Tab past "
@@ -2487,6 +2505,24 @@ class LLMAgent:
                                 or _bf_key in self._typed_keys):
                             continue
                         _bf_sec = self._detect_section(state, _bf_el)
+                        # A source that cannot identify this field is not
+                        # saying it is blank - it is saying it does not know,
+                        # and those must not be collapsed. Scope #1 never had to
+                        # tell them apart: a Notepad record's keys ARE the form's
+                        # labels, so a miss really did mean blank. Scope #2 asks
+                        # a grade book for "Course Abad, Andrea A." while its
+                        # columns are PROGRAM and FINAL GRADE - so every field
+                        # missed, every one was ruled confirmed-blank, and a live
+                        # run tabbed past 109 of them without filling one. Left
+                        # unmarked and unfilled, the field stays visible and
+                        # empty for the transformer/LLM path below, which is
+                        # where deciding what a portal column wants from a record
+                        # in another vocabulary belongs.
+                        if not self._source_knows(_bf_label):
+                            logger.info("[OPT2] batch fast-fill '%s' -> the data source "
+                                        "does not recognise this field; leaving it for "
+                                        "the transformer/LLM", _bf_label)
+                            continue
                         _bf_val = self._resolve_field_value_with_escalation(state, _bf_label, section=_bf_sec)
                         if not _bf_val:
                             logger.info("[OPT2] batch fast-fill '%s' → confirmed blank, Tab past "
@@ -8114,6 +8150,21 @@ class LLMAgent:
         return ""
 
     # ── LLM dispatch ─────────────────────────────────────────────────────────
+
+    def _source_knows(self, field_name: str) -> bool:
+        """Can the data source even identify this field?
+
+        Optional on the adapter: a source without can_answer() keeps the old
+        behaviour exactly, because that is what every existing source already
+        assumed of itself.
+        """
+        asker = getattr(self._source, "can_answer", None)
+        if not callable(asker):
+            return True
+        try:
+            return bool(asker(field_name))
+        except Exception:
+            return True
 
     def _resolve_field_value_with_escalation(self, state: Dict[str, Any],
                                               field_name: str, section: str = "") -> str:

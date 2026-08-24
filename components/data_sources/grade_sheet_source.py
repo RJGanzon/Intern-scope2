@@ -218,6 +218,44 @@ class GradeSheetSource(DataSource):
         value = self._record.get(column, "")
         return value if value != "" else None
 
+    def can_answer(self, field_name: str) -> bool:
+        """True only when this name resolves to a column of the grade book.
+
+        A portal cell called "Course Abad, Andrea A." does not, and saying so is
+        the point: the agent must not read that as the sheet asserting the field
+        is blank. Bridging the two vocabularies is the LLM's job - it can see
+        the screen and the record together - and lookup() still refuses to guess
+        (see its own note on synonyms).
+        """
+        if self._record_num is None:
+            self.refresh(0)
+        return self._resolve_column(field_name, list(self._record.keys())) is not None
+
+    def read_full_text(self, state: Optional[Dict[str, Any]] = None) -> str:
+        """The current student's record, as text the LLM can read.
+
+        The seam the agent reads a source through (agent._read_notepad_full_text
+        -> self._source.read_full_text). NotepadDataSource returns the whole
+        intake document; there is no document here, so the record is rendered as
+        one - labelled with the grade book's own column names, because those
+        names are exactly what the LLM needs in order to work out that a cell
+        headed "Course" wants the PROGRAM.
+
+        `state` is accepted and ignored: Notepad needs it to find its window,
+        a spreadsheet on disk does not.
+        """
+        if self._record_num is None:
+            self.refresh(0)
+        lines = []
+        for key, value in self._record.items():
+            key = str(key).strip()
+            # pandas names the columns under a merged header "Unnamed: 3"; they
+            # carry the rest of the student's name and are meaningless as labels.
+            if not key or key.lower().startswith("unnamed"):
+                continue
+            lines.append(f"{key}: {self._as_text(value)}")
+        return chr(10).join(lines)
+
     def get_all(self) -> Dict[str, str]:
         """Every field of the current student."""
         if self._record_num is None:
