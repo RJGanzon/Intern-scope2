@@ -164,11 +164,52 @@ def parse_args(argv=None):
     ap.add_argument("--step-delay", type=float, default=STEP_DELAY)
     ap.add_argument("--max-elements", type=int, default=1000,
                     help="Cap on elements read per snapshot (the portal has 303).")
+    ap.add_argument("--no-matcher", action="store_true",
+                    help="Do not map the portal's column names onto the sheet's. "
+                         "The agent then asks the sheet for 'Course Abad, Andrea "
+                         "A.', which it cannot answer - useful only for seeing "
+                         "that failure deliberately.")
     ap.add_argument("--no-plugin", action="store_true",
                     help="Pure transformer + LLM, no GradePortalPlugin - the shape "
                          "run_task.py uses. Needs a trained checkpoint to be useful.")
     ap.add_argument("--countdown", type=int, default=5)
     return ap.parse_args(argv)
+
+
+_FIELD_SPEC_JS = """
+() => Array.from(document.querySelectorAll("thead th[data-key][data-type]")).map(th => ({
+  label: (th.dataset.label || th.textContent || "").replace(/\\s+/g, " ").trim(),
+  input_type: th.dataset.type || "text",
+  placeholder: th.dataset.placeholder || "",
+  options: th.dataset.options ? th.dataset.options.split(",") : null,
+  maxlength: th.dataset.maxlength ? Number(th.dataset.maxlength) : null,
+  min: th.dataset.min || null,
+  max: th.dataset.max || null,
+  step: th.dataset.step || null,
+  required: th.hasAttribute("data-required"),
+}))
+"""
+
+
+def read_field_specs(observer):
+    """What the portal declares about each column, read off the page itself.
+
+    This is what the matcher gets fed, and what it is fed decides whether it
+    works. The same checkpoint mapped Course to "No." at 0.833 when every field
+    arrived as a bare "text" with no placeholder. The portal's own header
+    carries placeholder="BS Computer Science" and the sheet's PROGRAM column
+    holds "BS Information Systems"; with that present, the pair scores 1.000.
+
+    Read from the DOM rather than written down here, so a variant that renames
+    or reorders its columns is still described correctly with nobody editing
+    this file.
+    """
+    try:
+        return observer._page.evaluate(_FIELD_SPEC_JS)
+    except Exception as exc:
+        logger.warning("Could not read the portal's column definitions (%s); the "
+                       "matcher will have only labels to go on.", exc)
+        return []
 
 
 def discover_llm_model(url, timeout=5.0):
@@ -237,9 +278,15 @@ def main(argv=None) -> int:
     from agent.scope import GRADE_PORTAL_SCOPE
     from agent.task_plugins.grade_portal_plugin import GradePortalPlugin
     from data_sources.grade_sheet_source import GradeSheetSource
+    from data_sources.matched_source import MatchedFieldSource
 
     observer = build_observer(args)
     logger.info("Perception: WebObserver over CDP at %s", args.browser_url)
+
+    field_specs = [] if args.no_matcher else read_field_specs(observer)
+    if field_specs:
+        logger.info("Portal declares %d column(s): %s", len(field_specs),
+                    ", ".join(f["label"] for f in field_specs))
 
     api_key = (os.environ.get("ANTHROPIC_API_KEY", "")
                or os.environ.get("GROQ_API_KEY", "")
@@ -267,6 +314,14 @@ def main(argv=None) -> int:
             # with the first student's grades.
             source = GradeSheetSource(sheet, sheet_name=args.sheet_name) \
                 if args.sheet_name else GradeSheetSource(sheet)
+            # Wrapped, not modified: the agent still receives one object with
+            # lookup/get_all/can_answer and still cannot tell which application
+            # it is driving. What changes is that the object now answers
+            # questions phrased in the PORTAL's words - "Course Abad, Andrea A."
+            # rather than PROGRAM - which is the one thing that stood between
+            # the plugin-free path and a working run.
+            if field_specs:
+                source = MatchedFieldSource(source, field_specs)
 
             plugin = None
             if not args.no_plugin:
