@@ -2427,6 +2427,7 @@ class LLMAgent:
                     state, _nav_vb, attempted_keys=self._attempted_keys,
                     attempt_key_fn=self._attempt_key)
                 _bf_filled = 0
+                _bf_deferred = []
                 if _bf_targets:
                     self._ensure_foreground(state)
                 for _bf_el in _bf_targets:
@@ -2589,6 +2590,14 @@ class LLMAgent:
                         self._executor.execute({"action_type": "keyboard",
                                                 "key_count": 1, "keystrokes": ["tab"]})
                         _bf_filled += 1
+                # One line per step, not one per field: the batch sees every
+                # visible cell, so a fifty-row grid logged 150 lines a step and
+                # buried everything else that happened in it - 5,347 lines for a
+                # 60-step run.
+                if _bf_deferred:
+                    logger.info("[OPT2] %d field(s) the data source does not recognise, "
+                                "left for the transformer/LLM (e.g. %s)",
+                                len(_bf_deferred), ", ".join(_bf_deferred[:3]))
                 if _bf_filled > 0:
                     logger.info("[OPT2] batch fast-fill: %d field(s) filled in one pass, no per-field re-observe.",
                                 _bf_filled)
@@ -8151,6 +8160,67 @@ class LLMAgent:
 
     # ── LLM dispatch ─────────────────────────────────────────────────────────
 
+    def _match_field_to_record(self, field_name: str) -> str:
+        """Ask the LLM which RECORD ENTRY a screen field wants, not what to type.
+
+        The vocabulary bridge, posed as a choice rather than as generation. Asked
+        to copy a value out of a record, a 4B model answered "85" for the Course,
+        the Year and the Grade of the same row - the first number it saw. Asked
+        instead which of eight named entries the column corresponds to, the
+        answer space is eight strings, and a wrong one is detectable rather than
+        plausible.
+
+        The value never comes from the model: it names a column, this looks the
+        column up, and a name that is not in the record is rejected outright.
+        That is this codebase's own lookup-as-validator principle - the model
+        supplies the judgement it is needed for, the record supplies the data.
+
+        Returns the value, or "" when there is no confident match.
+        """
+        if not self._llm_client or not field_name:
+            return ""
+        try:
+            record = self._source.get_all() or {}
+        except Exception:
+            return ""
+        keys = [str(k).strip() for k in record
+                if str(k).strip() and not str(k).lower().startswith("unnamed")]
+        if not keys:
+            return ""
+
+        listing = chr(10).join(f"  {i + 1}. {k} = {record.get(k)!r}"
+                            for i, k in enumerate(keys))
+        prompt = (
+            f'A data-entry field on screen is labelled: "{field_name}"' + chr(10) * 2 +
+            "In a grid, a field is labelled \"<column> <which row>\". Only the "
+            "column half says what kind of value belongs there; the rest just "
+            "identifies the row and is irrelevant here." + chr(10) * 2 +
+            f"Here is the source record:{chr(10)}{listing}" + chr(10) * 2 +
+            "Which numbered entry does that column correspond to? The wording "
+            "differs between the two systems; match on meaning." + chr(10) +
+            "Answer with the NUMBER ALONE. If none of them fits, answer 0."
+        )
+        try:
+            response = self._llm_client.chat.completions.create(
+                model=self._llm_model, max_tokens=8,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            answer = (response.choices[0].message.content or "").strip()
+        except Exception as exc:
+            logger.warning("Field-match call failed: %s", exc)
+            return ""
+
+        import re as _re
+        digits = _re.search(chr(92) + "d+", answer)
+        if not digits:
+            return ""
+        index = int(digits.group()) - 1
+        if not (0 <= index < len(keys)):
+            return ""       # 0, or out of range: the model declined, believe it
+        value = self._source.lookup(keys[index])
+        logger.info("Field match: %r -> record %r = %r", field_name, keys[index], value)
+        return value or ""
+
     def _source_knows(self, field_name: str) -> bool:
         """Can the data source even identify this field?
 
@@ -8265,7 +8335,18 @@ class LLMAgent:
                 # tracked as the fix for execution_llm_value_errors) — if three
                 # independent lookup attempts agree there's no data, there's
                 # nothing for the LLM to add by being asked a fourth time.
-                if _fn != "?":
+                # ...but only when the source could have answered in the
+                # first place. The same collapse as OPT2's: three lookups
+                # agreeing on nothing means "blank" when the source knows the
+                # field, and means "I was asked in a vocabulary I do not speak"
+                # when it does not. A grade book has PROGRAM and FINAL GRADE;
+                # the portal asks for "Course Abad, Andrea A.". Working out what
+                # that cell wants from this record is precisely what the LLM is
+                # here for, so this is the one case that must reach it.
+                if _fn != "?" and not self._source_knows(_fn):
+                    logger.info("LLM: %r is not a field this data source recognises - "
+                                "asking the LLM rather than assuming it is blank.", _fn)
+                elif _fn != "?":
                     logger.info("LLM call skipped — direct lookup confirms %r has no record value "
                                 "(leave blank)", _fn)
                     return {"action_type": "type", "text": "", "_fast_path": "lookup_blank"}
@@ -8275,6 +8356,40 @@ class LLMAgent:
                     f"\n  → Use EXACTLY this string as 'text'. Do NOT modify or invent."
                     if _expected else ""
                 )
+                # When the lookup could not answer, the LLM needs the record
+                # itself: it cannot translate a column it has never seen.
+                #
+                # Scope #1 never needed this. Its source is a Notepad window, so
+                # the record arrives in the observation as background elements -
+                # literally on screen. A spreadsheet is a file. The first run to
+                # reach this branch had the LLM answer "type" with an empty
+                # string, reasoning "needs to be populated with the course name":
+                # it had worked out the task exactly and had no data to do it
+                # with.
+                if not _expected and not self._source_knows(_fn):
+                    _record_text = self._read_notepad_full_text(state).strip()
+                    if _record_text:
+                        _lines = "\n".join(f"      {ln}"
+                                           for ln in _record_text.splitlines()[:20])
+                        # The name-half warning is load-bearing, not padding. A
+                        # grid cell is named "<column> <which row>", and only the
+                        # column half says what KIND of value is wanted. Without
+                        # being told that, a small model matched on the whole
+                        # string and answered "Year 1-5 Abad, Andrea A." with 85 -
+                        # a grade, from the row it had correctly identified.
+                        _expect_hint += (
+                            "\n  → THE SOURCE RECORD FOR THIS ROW:\n" + _lines +
+                            "\n  → READING THE FIELD NAME: in a grid a cell is named "
+                            "\"<column> <which row>\" - \"Grade 0-100 Abad, Andrea A.\" is "
+                            "the Grade column of Abad's row. ONLY the column half says what "
+                            "kind of value is wanted. The rest identifies the row and must "
+                            "be ignored when choosing the value."
+                            "\n  → Match that column half to the record entry meaning the "
+                            "same thing, though worded differently, and copy that entry's "
+                            "value EXACTLY. Never answer with a value belonging to a "
+                            "different column, and never invent one. If nothing in the "
+                            "record fits, answer with an empty string."
+                        )
                 focused_banner = (
                     f"⚠ CURRENTLY FOCUSED FIELD: [{_ft}] \"{_fn}\""
                     + (f" — current value: {_fv!r}" if _fv else " — EMPTY")
