@@ -89,7 +89,22 @@ def main():
         state = t.get("state", {})
         nstate = t.get("next_state", {})
         m = t.get("mouse", {}).get("actions", [])
+        k = t.get("keyboard", {}).get("actions", [])
         if not m:
+            # A typing step cannot be scored - there is no click to compare -
+            # but it MUST still enter the history. The model is trained on the
+            # real alternating sequence (click, type, click, type), and skipping
+            # these outright fed it a history of clicks only: a sequence that
+            # never occurs in training. Measured: the same checkpoint scored
+            # 21% here and 72-99% inside train.py on the very same session.
+            if k:
+                strokes = sum(len(g.get("strokes", [])) for g in k)
+                history.append({
+                    "state": state,
+                    "action_type": "keyboard",
+                    "click_xy": [0.0, 0.0],
+                    "key_count": strokes or 1,
+                })
             continue
         pos = m[0].get("position")
         els = state.get("elements", [])
