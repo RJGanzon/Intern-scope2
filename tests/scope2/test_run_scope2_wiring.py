@@ -99,7 +99,17 @@ def captured(monkeypatch, tmp_path):
             return True
 
         def snapshot(self):
-            return {"window_title": "Grade Encoding Portal", "elements": []}
+            # A page with real elements and an on-screen viewport. The empty
+            # version this used to return now trips the pre-run check, which is
+            # the check doing its job: a run against a page with no elements,
+            # or against a minimised window, spends its whole life scrolling for
+            # targets that report as off-screen.
+            return {"window_title": "Grade Encoding Portal", "application": "browser",
+                    "viewport_bounds": [0, 100, 1400, 900],
+                    "screen_resolution": [1920, 1080],
+                    "elements": [{"element_id": "e1", "type": "editcontrol",
+                                  "label": "Course Abad, Andrea A.", "value": "",
+                                  "window_role": "active", "bbox": [470, 379, 551, 422]}]}
 
         def disconnect(self):
             FakeObserver.disconnected = True
@@ -162,6 +172,11 @@ def test_the_browser_is_released_even_when_the_run_raises(monkeypatch, capsys):
     seen = {"disconnected": False}
 
     class FakeObserver:
+        def snapshot(self):
+            return {"viewport_bounds": [0, 100, 1400, 900],
+                    "elements": [{"element_id": "e1", "type": "editcontrol",
+                                  "label": "Course A", "bbox": [1, 1, 2, 2]}]}
+
         def disconnect(self):
             seen["disconnected"] = True
 
@@ -243,6 +258,37 @@ def test_the_kill_switch_is_armed_before_the_agent_is_imported():
     armed = src.index("start_emergency_stop_listener()")
     assert armed < src.index("raise SystemExit(main())")
     assert "from agent.agent import LLMAgent" in src.split("def main(")[1],         "the agent import escaped main() and now runs before the kill switch"
+
+
+def test_a_minimised_window_stops_the_run_before_the_countdown(monkeypatch):
+    """The precondition that otherwise fails silently and looks like a broken
+    agent. Windows parks a minimised window at -32000, so every element reports
+    off-screen and the run scrolls forever hunting for a target that is sitting
+    right there. Caught while it still costs nothing to fix."""
+    class Minimised:
+        def snapshot(self):
+            return {"viewport_bounds": [-32000, -32000, -29600, -30650],
+                    "elements": [{"element_id": "e1", "label": "Course A"}]}
+
+        def disconnect(self):
+            pass
+
+    monkeypatch.setattr(run_scope2, "build_observer", lambda args: Minimised())
+    with pytest.raises(SystemExit, match="minimised"):
+        run_scope2.main(["--records", "0"])
+
+
+def test_an_empty_page_stops_the_run_too(monkeypatch):
+    class Blank:
+        def snapshot(self):
+            return {"viewport_bounds": [0, 0, 1400, 900], "elements": []}
+
+        def disconnect(self):
+            pass
+
+    monkeypatch.setattr(run_scope2, "build_observer", lambda args: Blank())
+    with pytest.raises(SystemExit, match="no elements"):
+        run_scope2.main(["--records", "0"])
 
 
 def test_a_missing_sheet_stops_before_touching_the_browser(monkeypatch):

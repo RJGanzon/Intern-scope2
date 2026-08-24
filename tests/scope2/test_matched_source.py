@@ -109,10 +109,25 @@ def test_it_still_answers_the_sources_own_words(matched):
     assert matched.lookup("PROGRAM") == "BS Information Systems"
 
 
-def test_an_abstained_field_reports_that_it_cannot_be_answered(matched):
-    """So the agent hands it on rather than typing something into it."""
-    assert not matched.can_answer("Remarks Abad, Andrea A.")
+def test_an_abstained_field_is_answered_with_nothing(matched):
+    """An abstention IS an answer: the matcher looked at every column and found
+    none that feeds this field. Remarks is derived by the portal from the grade;
+    Recommendations is optional.
+
+    Reporting them as unanswerable - the first version of this - sent them to
+    the LLM instead, which is the one place they must not go. Asked what
+    belonged in Remarks, gemma-3-4b replied 85, the grade, into a field the page
+    fills for itself. Claiming to answer, with lookup() returning None, is what
+    makes the agent treat them as confirmed blank and leave them alone."""
+    assert matched.can_answer("Remarks Abad, Andrea A.")
+    assert matched.lookup("Remarks Abad, Andrea A.") is None
     assert matched.can_answer("Course Abad, Andrea A.")
+
+
+def test_a_field_belonging_to_neither_system_is_still_unanswerable(matched):
+    """The distinction the above must not erase: a name that is not one of the
+    portal's columns at all is genuinely unknown, and should reach the LLM."""
+    assert not matched.can_answer("Some Field From Another Application")
 
 
 def test_the_row_half_selects_the_row_not_the_column(matched):

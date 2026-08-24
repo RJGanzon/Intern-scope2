@@ -204,8 +204,28 @@ class MatchedFieldSource(DataSource):
             return self._inner.lookup(field_name, section=section)
         return self._inner.lookup(column, section=section)
 
+    def is_known_field(self, field_name: str) -> bool:
+        """Is this one of the target's own columns, mapped or not?"""
+        name = (field_name or "").strip()
+        return any(name == label or name.startswith(label + " ")
+                   for label in self._column_names if label)
+
     def can_answer(self, field_name: str) -> bool:
+        """True for a mapped field, and ALSO true for one that was abstained on.
+
+        An abstention is an answer: the matcher looked at every column and found
+        none that feeds this field. Remarks is derived by the portal from the
+        grade; Recommendations is optional. The right value for both is nothing.
+
+        Reporting them as unanswerable sent them to the LLM instead, which is
+        the one place they must not go - asked what belonged in Remarks,
+        gemma-3-4b replied 85, the grade, into a field the page fills itself.
+        Claiming to answer, with lookup() returning None, is what makes the
+        agent treat them as confirmed blank and leave them alone.
+        """
         if self.column_for(field_name) is not None:
+            return True
+        if self.is_known_field(field_name):
             return True
         asker = getattr(self._inner, "can_answer", None)
         return bool(asker(field_name)) if callable(asker) else True

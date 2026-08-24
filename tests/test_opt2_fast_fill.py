@@ -430,8 +430,18 @@ class TestBatchFastFill:
     BM_SETCHECK), not a reimplementation."""
 
     def _batch_window(self):
-        idx = _SOURCE.index("OPT2 BATCH FAST-FILL")
-        return _SOURCE[idx:idx + 15000]
+        """The batch block, bounded by where the single-field block begins.
+
+        Was a fixed 15,000 characters, which stops covering what it names as
+        soon as the block grows: adding comments to the gate pushed the end
+        marker out of the window, and three tests failed with "substring not
+        found" about code that had not moved at all. The next block's own
+        marker is the real boundary, and this file already asserts it comes
+        after.
+        """
+        start = _SOURCE.index("OPT2 BATCH FAST-FILL")
+        end = _SOURCE.index("OPT2 FAST-FILL: skip the transformer", start)
+        return _SOURCE[start:end]
 
     def test_batch_block_exists_before_the_single_field_block(self):
         batch_idx = _SOURCE.index("OPT2 BATCH FAST-FILL")
@@ -440,7 +450,19 @@ class TestBatchFastFill:
 
     def test_gated_on_no_autohandlers(self):
         window = self._batch_window()
-        assert "if self._no_autohandlers:" in window
+        assert "self._no_autohandlers and _win32_backed" in window
+
+    def test_also_gated_on_the_observation_having_window_handles(self):
+        """Every branch here fills through a control HANDLE - WM_SETTEXT /
+        CB_SETCURSEL / BM_SETCHECK after a SetFocus - which is what makes it
+        fast and what makes it useless against a web page, where a cell is a
+        DOM node with no HWND at all. Reached with a DOM observation it
+        resolved values correctly and then filled nothing, silently, because
+        handle resolution failed for every field and each was skipped as
+        unresolvable."""
+        window = self._batch_window()
+        assert "_win32_backed" in window
+        assert 'state.get("source")' in window
 
     def test_uses_the_real_find_all_visible_empty_targets(self):
         """Must reuse the shared eligibility rule (navigation_protocol.py),
@@ -580,8 +602,18 @@ class TestBatchFastFillConfirmedBlankSkip:
     past a confirmed-blank field with no transformer call at all."""
 
     def _batch_window(self):
-        idx = _SOURCE.index("OPT2 BATCH FAST-FILL")
-        return _SOURCE[idx:idx + 15000]
+        """The batch block, bounded by where the single-field block begins.
+
+        Was a fixed 15,000 characters, which stops covering what it names as
+        soon as the block grows: adding comments to the gate pushed the end
+        marker out of the window, and three tests failed with "substring not
+        found" about code that had not moved at all. The next block's own
+        marker is the real boundary, and this file already asserts it comes
+        after.
+        """
+        start = _SOURCE.index("OPT2 BATCH FAST-FILL")
+        end = _SOURCE.index("OPT2 FAST-FILL: skip the transformer", start)
+        return _SOURCE[start:end]
 
     def test_editcontrol_and_comboboxcontrol_both_use_the_escalation_helper(self):
         window = self._batch_window()

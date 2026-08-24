@@ -2422,7 +2422,24 @@ class LLMAgent:
             # transformer fallback below on a later step, exactly as if
             # batch fast-fill had never run. filled_count starts at 0 and
             # only a nonzero count short-circuits the rest of this step.
-            if self._no_autohandlers:
+            # Win32-only, by construction. Every branch of it fills through a
+            # control HANDLE - WM_SETTEXT / CB_SETCURSEL / BM_SETCHECK after a
+            # SetFocus - which is what makes it fast and what makes it useless
+            # against a web page, where a cell is a DOM node and has no HWND at
+            # all. Reached with a DOM observation it resolved values correctly
+            # and then silently filled nothing, because handle resolution failed
+            # for every field and each one was skipped as unresolvable.
+            #
+            # Skipped rather than fixed: the ordinary click-then-type path below
+            # already drives a browser correctly, through screen coordinates the
+            # observer now reports accurately. This is a speed path for desktop
+            # forms, not a capability anything depends on.
+            _win32_backed = (state.get("source") or "").lower() not in ("web", "dom")
+            if self._no_autohandlers and not _win32_backed:
+                logger.debug("[OPT2] batch fast-fill skipped - this observation has no "
+                             "window handles to fill through (source=%r)",
+                             state.get("source"))
+            if self._no_autohandlers and _win32_backed:
                 _bf_targets = self._navproto.find_all_visible_empty_targets(
                     state, _nav_vb, attempted_keys=self._attempted_keys,
                     attempt_key_fn=self._attempt_key)
@@ -6462,6 +6479,15 @@ class LLMAgent:
         clamped to the screen). Used to tell on-screen fields from scrolled-off
         ones — the window size varies per run, so this must be read live."""
         sh = state.get("screen_resolution", [1920, 1200])[1]
+        # An observation that knows its own bounds is believed over anything
+        # Windows can be asked. The fallback measures the FOREGROUND window,
+        # which is the terminal when a run is launched from one and reports
+        # -32000 when a window is minimised - and a viewport read off the wrong
+        # window put every field off-screen, so a sheet with 150 empty cells
+        # reported nothing left to fill.
+        bounds = state.get("viewport_bounds")
+        if bounds and len(bounds) == 4:
+            return min(float(bounds[3]), sh)
         try:
             import win32gui
             hwnd = self._locked_hwnd or win32gui.GetForegroundWindow()
@@ -6573,7 +6599,42 @@ class LLMAgent:
         val = _get(field_name)
         if not val:
             val = _get_fuzzy(field_name)
+        if not val:
+            val = self._lookup_via_source(field_name, section)
         return val
+
+    def _lookup_via_source(self, field_name: str, section: str = "") -> str:
+        """Ask the data source directly, when the cached record cannot answer.
+
+        The cache is built by parsing the source's text into {key: value}, which
+        works whenever the record's keys are the names the agent asks with -
+        true for every scope #1 source, and the reason this was never needed.
+
+        It is not true when the two systems name things differently. The cache
+        holds PROGRAM and FINAL GRADE; the agent asks for "Course Abad, Andrea
+        A.". Every question missed, and the source itself - which CAN translate,
+        that being the whole job of a source adapter - was never consulted,
+        because the cache stood in front of it. A live run tabbed past every
+        field with the matched mapping sitting right there, already resolved.
+
+        DataSource.lookup is documented as where field values come from, so
+        falling through to it restores that rather than adding anything.
+        """
+        source = getattr(self, "_source", None)
+        if source is None:
+            return ""
+        try:
+            value = source.lookup(field_name, section=section)
+        except TypeError:
+            try:
+                value = source.lookup(field_name)
+            except Exception:
+                return ""
+        except Exception:
+            return ""
+        if not value or _is_leave_blank_value(value):
+            return ""
+        return str(value)
 
     def _auto_fill(self, state: Dict[str, Any]) -> Optional[tuple]:
         """

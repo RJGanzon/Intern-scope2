@@ -283,6 +283,18 @@ def main(argv=None) -> int:
     observer = build_observer(args)
     logger.info("Perception: WebObserver over CDP at %s", args.browser_url)
 
+    # A minimised window is the one precondition that fails silently and looks
+    # like a broken agent: every element reports off-screen, so the run scrolls
+    # forever hunting for a target that is right there. Checked before the
+    # countdown, when it still costs nothing to fix.
+    _probe = observer.snapshot()
+    _bounds = _probe.get("viewport_bounds")
+    if _bounds and (_bounds[0] <= -30000 or _bounds[1] <= -30000):
+        raise SystemExit("The portal window is minimised - restore it and run again. "
+                         "Nothing on the page can be clicked while it is.")
+    if not _probe.get("elements"):
+        raise SystemExit("The portal page has no elements. Is the right tab open?")
+
     field_specs = [] if args.no_matcher else read_field_specs(observer)
     if field_specs:
         logger.info("Portal declares %d column(s): %s", len(field_specs),

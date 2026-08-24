@@ -232,11 +232,25 @@ class WebObserver:
         # so leaving this None made every web state look like nothing had focus.
         focused = next((e["element_id"] for e in elements if e["focused"]), None)
 
+        # Where the page actually is, in the same coordinates as the bboxes.
+        # Downstream this decides which fields count as on-screen and where a
+        # scroll is aimed; without it the agent asks Windows for the FOREGROUND
+        # window and measures that instead - which is the terminal when a run is
+        # launched from one, and reports (-32000, -32000) when that window is
+        # minimised. A page whose viewport was read off another window had no
+        # on-screen fields at all, on a sheet with 150 empty cells.
+        viewport = None
+        if origin:
+            viewport = [int(origin["dx"]), int(origin["dy"]),
+                        int(origin["dx"] + vp["width"] * origin["dpr"]),
+                        int(origin["dy"] + vp["height"] * origin["dpr"])]
+
         return {
             "application":        "browser",
             "window_title":       title,
             "process_id":         None,
             "screen_resolution":  [W, H],
+            "viewport_bounds":    viewport,
             "focused_element_id": focused,
             "elements":           elements,
             "source":             "web",
@@ -315,6 +329,16 @@ class WebObserver:
         # A viewport is not a few pixels across. Anything this small is a stub
         # or a collapsed window, and using it would silently squash every bbox.
         if right - left < 200 or bottom - top < 200:
+            return None
+        # Windows parks a MINIMISED window at -32000, and that rectangle is
+        # geometrically valid - right size, right shape, just nowhere. Taken as
+        # the origin it put every element at roughly (-31000, -30000): no field
+        # counted as on-screen, so a sheet of 150 empty cells reported nothing
+        # left to fill, and a scroll was aimed off the desktop entirely.
+        if left <= -30000 or top <= -30000:
+            logger.warning("WebObserver: window is minimised (rect %s) - no usable "
+                           "screen position; falling back to DOM geometry.",
+                           (left, top, right, bottom))
             return None
         return {"left": float(left), "top": float(top),
                 "right": float(right), "bottom": float(bottom)}
@@ -436,6 +460,20 @@ class WebObserver:
                     "height", int(geometry["screenHeight"] * scale)),
                 "source": "win32",
             }
+
+        # The same minimised-window sentinel, on this path too. window.screenX
+        # reports -32000 for a minimised window exactly as GetWindowRect does,
+        # so guarding only the Win32 lookup left this one to produce a viewport
+        # at (-32000, -32000) and put every element off-screen. The agent then
+        # behaves correctly on nonsense input: no field is reachable, so it
+        # scrolls forever looking for one, on a page with 150 empty cells.
+        if geometry["screenX"] <= -30000 or geometry["screenY"] <= -30000:
+            logger.warning(
+                "WebObserver: the browser window is MINIMISED (reported at %s, %s). "
+                "Nothing on the page can be clicked until it is restored, and every "
+                "element will read as off-screen.",
+                geometry["screenX"], geometry["screenY"])
+            return None
 
         border = max(0.0, (geometry["outerWidth"] - geometry["innerWidth"]) / 2.0)
         chrome = max(0.0, geometry["outerHeight"] - geometry["innerHeight"] - border)
