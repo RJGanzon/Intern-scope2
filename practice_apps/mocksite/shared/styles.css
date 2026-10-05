@@ -235,3 +235,81 @@ tr.just-saved td { background: #eaf3ec; }
 
 .legend .swatch.dirty { border-left: 3px solid var(--accent); }
 .legend .swatch.invalid { background: #fbeaea; border-color: var(--danger); }
+
+/* ---- presentation layer ----
+
+   Everything below is paint only: colour, weight, glow, an absolutely
+   positioned progress strip. None of it may take up space or add a control,
+   because the agent reads every control's screen box and the grade-portal
+   model was trained on this exact geometry. tests/scope2/
+   test_portal_geometry_frozen.py holds the line: it fails if any observed
+   element moves by a pixel. */
+
+/* A hint must never read as a value. The placeholders used to be the same
+   grey as an encoded entry, so an untouched sheet looked half done and an
+   audience could not see the agent's progress. */
+.sheet td input::placeholder,
+.sheet td textarea::placeholder {
+  color: #b6bdc6;
+  font-style: italic;
+  opacity: 1;
+}
+
+.sheet td:not(.blank) input,
+.sheet td:not(.blank) select,
+.sheet td:not(.blank) textarea {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* The row being worked on, wherever focus is - a person's or the agent's. */
+.sheet tbody tr:focus-within > td { background-color: #eaf1fb; }
+.sheet tbody tr:focus-within > td.fixed { color: var(--accent); }
+.sheet tbody tr > td.invalid { background-color: #fbeaea; }
+
+/* A cell glows as it is written, then settles. Blue for a typed value, green
+   for one the portal derived itself (Remarks from Grade). On the control, not
+   the <td>: the control covers its whole cell. */
+@keyframes cell-typed {
+  from { background-color: #cfe0fa; box-shadow: inset 0 0 0 2px var(--accent); }
+}
+@keyframes cell-derived {
+  from { background-color: #d3ecdc; box-shadow: inset 0 0 0 2px var(--ok); }
+}
+.sheet td.just-typed > input,
+.sheet td.just-typed > select,
+.sheet td.just-typed > textarea { animation: cell-typed 1.4s ease-out; }
+.sheet td.just-derived > select { animation: cell-derived 1.6s ease-out; }
+
+/* Progress: a strip along the top edge of the sheet's panel. Absolutely
+   placed, so it occupies no layout. Light segment = filled on screen,
+   solid = saved into the record. */
+.panel { position: relative; }
+
+.progress-strip {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  right: -1px;
+  height: 5px;
+  border-radius: 4px 4px 0 0;
+  background: #e3e7ec;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.progress-strip span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  transition: width 0.45s ease-out, background-color 0.45s;
+}
+
+.progress-strip .filled { background: #9bbbe6; }
+.progress-strip .saved { background: var(--accent); }
+.progress-strip.complete .saved { background: var(--ok); }
+
+.count-num { color: var(--accent); font-weight: 700; }
+.count-num.complete { color: var(--ok); }

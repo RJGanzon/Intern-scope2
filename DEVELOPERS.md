@@ -780,6 +780,11 @@ perception.
 
   **Not done, and it is the whole point: no demonstrations have been recorded yet.** That is a live run, which is the user's to execute. Until then `COLUMN_MAP` is still doing the work a learned mapping should do.
 
+- [x] `scope2_portal_presentation_polish` — **2026-10-06, direct request** ("more visually appealing and interesting for presentation", explicitly not a backend change). The grade portal is what an audience watches during a Scope #2 demo, and it hid the agent's progress: placeholder hints were the same grey as encoded values, so an untouched sheet looked half done.
+  **Constraint that shaped every choice:** the WebObserver reports each control's screen box and the grade-portal model was trained on this exact layout, so the restyle had to be paint only — no column width, padding, row height or font-size change, and no new button/link/input (the observer's selector would pick it up). Frozen as data before any edit: `tests/scope2/portal_geometry_baseline.json` holds every observed element's box in all 8 variants (303 / 403 controls), and `test_portal_geometry_frozen.py` requires an exact match. It passed after the change: zero elements moved.
+  **What changed:** (1) hints faint italic, encoded values dark and bold; (2) the focused row is tinted, the cell being written glows blue and the auto-derived Remarks glows green — done in the page, NOT by re-enabling the ghost-cursor overlay, which stays off per the 2026-08-11 decision in `agent.py`; (3) a progress strip along the panel's top edge (absolutely positioned, takes no space) showing filled-on-screen vs saved, with a "N / 50 filled · M saved" counter — passes save once at the end, so counting saved rows alone sat at 0 for the whole run; (4) the variants index rebuilt as cards with each variant's column chips and its change highlighted (also fixed its table overflowing the panel).
+  *(Guards: `test_portal_geometry_frozen.py` — 16; `test_portal_derived_remarks.py` unchanged and passing.)*
+
 ---
 
 ### Scope #3 — Email / Ticket Triage

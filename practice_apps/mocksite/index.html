@@ -5,48 +5,165 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Mock Grade Portal - Variants</title>
   <link rel="stylesheet" href="shared/styles.css">
+  <!-- Index-only styles. The variants never load this page, so nothing here can
+       move a control the agent observes; shared/styles.css stays the sheet's. -->
+  <style>
+    .lede { max-width: 760px; }
+    .lede strong { color: var(--text); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      color: inherit;
+      text-decoration: none;
+      transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+    }
+    .card:hover, .card:focus-visible {
+      border-color: var(--accent);
+      box-shadow: 0 6px 18px rgba(43, 95, 168, 0.14);
+      transform: translateY(-2px);
+      outline: none;
+    }
+
+    .card-head { display: flex; align-items: baseline; gap: 10px; }
+    .tag {
+      font: 700 12px/1 "Segoe UI", Arial, sans-serif;
+      color: #fff;
+      background: var(--accent);
+      border-radius: 4px;
+      padding: 4px 7px;
+    }
+    .card.control .tag { background: var(--muted); }
+    .card h2 { margin: 0; font-size: 16px; }
+
+    .change { margin: 0; }
+    .tests { margin: 0; color: var(--muted); font-size: 13px; }
+    .tests b { font-weight: 600; color: var(--text); }
+
+    /* The sheet's header row in miniature: what a column is called, in the
+       order the DOM has it. Highlighted chips are what this variant changed. */
+    .cols { display: flex; flex-wrap: wrap; gap: 4px; margin-top: auto; }
+    .col {
+      font-size: 11px;
+      line-height: 1;
+      padding: 5px 7px;
+      border-radius: 999px;
+      background: #eceef1;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .col.fixed { background: transparent; border: 1px dashed var(--border); }
+    .col.hot {
+      background: #fff3d6;
+      color: #7a5200;
+      box-shadow: inset 0 0 0 1px #e9c46a;
+      font-weight: 600;
+    }
+
+    .key { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 16px;
+           color: var(--muted); font-size: 12px; align-items: center; }
+  </style>
 </head>
 <body>
 <main>
   <h1>Mock Grade Portal</h1>
-  <p class="subtitle">Evaluation instrument. Every variant is an editable sheet - one row
-     per student, Index / Student ID / Student Name predefined, the rest encoder input.
-     Styling is held constant across variants; only structure and labelling change.</p>
+  <p class="subtitle lede">One agent, eight portals. Every variant is the same
+     50-student grade sheet with its <strong>structure or wording</strong> changed in
+     one specific way. The styling stays the same, so a change in the agent's result
+     comes from that one change and nothing else.</p>
 
-  <section class="panel">
-    <table>
-      <thead>
-        <tr><th scope="col">Variant</th><th scope="col">Change</th><th scope="col">Tests</th></tr>
-      </thead>
-      <tbody>
-        <tr><td><a href="v0_base/index.html">V0 - base</a></td>
-            <td>none</td>
-            <td>sanity; control / derived / unmapped partition</td></tr>
-        <tr><td><a href="v1_reordered/index.html">V1 - reordered</a></td>
-            <td>sheet columns reordered in DOM</td>
-            <td>position independence (feature 16 ablation)</td></tr>
-        <tr><td><a href="v2_relabeled/index.html">V2 - relabeled</a></td>
-            <td>Student ID / Course / Grade / Remarks renamed to Learner Reference Number /
-                Degree Program / Final Rating / Academic Standing</td>
-            <td>semantic matching; rule survives a renamed derived field</td></tr>
-        <tr><td><a href="v3_extra_fields/index.html">V3 - extra fields</a></td>
-            <td>adds Section and Adviser</td>
-            <td>correct non-assignment at scale</td></tr>
-        <tr><td><a href="v4_unassociated/index.html">V4 - unassociated headers</a></td>
-            <td>inputs carry no aria-labelledby; only the column header above them names them</td>
-            <td>label-cascade fallback (rules 5-6)</td></tr>
-        <tr><td><a href="v5_near_duplicates/index.html">V5 - near-duplicates</a></td>
-            <td>adds Grade (Recomputed) and Year Enrolled</td>
-            <td>abstention</td></tr>
-        <tr><td><a href="v6a_options/index.html">V6a - options</a></td>
-            <td>Remarks options renamed to PASSED / FAILED; scale unchanged</td>
-            <td>option matching (3.8 step 4), isolated</td></tr>
-        <tr><td><a href="v6b_scale/index.html">V6b - inverted scale</a></td>
-            <td>1.00-5.00 grading scale, 3.00 passing; options unchanged</td>
-            <td>induced operator direction, isolated</td></tr>
-      </tbody>
-    </table>
-  </section>
+  <p class="key">
+    <span><span class="col fixed">Index</span> printed by the portal</span>
+    <span><span class="col">Grade</span> column the agent fills</span>
+    <span><span class="col hot">Grade</span> what this variant changed</span>
+  </p>
+
+  <div class="grid">
+
+    <a class="card control" href="v0_base/index.html">
+      <div class="card-head"><span class="tag">V0</span><h2>Base</h2></div>
+      <p class="change">The reference sheet. Nothing changed.</p>
+      <p class="tests"><b>Tests:</b> sanity; control / derived / unmapped partition</p>
+      <div class="cols">
+        <span class="col fixed">Index</span><span class="col fixed">Student ID</span><span class="col fixed">Student Name</span><span class="col">Course</span><span class="col">Year</span><span class="col">Grade</span><span class="col">Remarks</span><span class="col">Recommendations</span>
+      </div>
+    </a>
+
+    <a class="card" href="v1_reordered/index.html">
+      <div class="card-head"><span class="tag">V1</span><h2>Reordered</h2></div>
+      <p class="change">The same columns, shuffled in the DOM.</p>
+      <p class="tests"><b>Tests:</b> position independence (feature 16 ablation)</p>
+      <div class="cols">
+        <span class="col fixed">Index</span><span class="col fixed hot">Student Name</span><span class="col fixed hot">Student ID</span><span class="col hot">Remarks</span><span class="col hot">Recommendations</span><span class="col hot">Grade</span><span class="col hot">Course</span><span class="col hot">Year</span>
+      </div>
+    </a>
+
+    <a class="card" href="v2_relabeled/index.html">
+      <div class="card-head"><span class="tag">V2</span><h2>Relabeled</h2></div>
+      <p class="change">Four headers renamed to registrar wording.</p>
+      <p class="tests"><b>Tests:</b> semantic matching; rule survives a renamed derived field</p>
+      <div class="cols">
+        <span class="col fixed">Index</span><span class="col fixed hot">Learner Reference Number</span><span class="col fixed">Student Name</span><span class="col hot">Degree Program</span><span class="col">Year</span><span class="col hot">Final Rating</span><span class="col hot">Academic Standing</span><span class="col">Recommendations</span>
+      </div>
+    </a>
+
+    <a class="card" href="v3_extra_fields/index.html">
+      <div class="card-head"><span class="tag">V3</span><h2>Extra fields</h2></div>
+      <p class="change">Two columns the source sheet has no data for.</p>
+      <p class="tests"><b>Tests:</b> correct non-assignment at scale</p>
+      <div class="cols">
+        <span class="col fixed">Index</span><span class="col fixed">Student ID</span><span class="col fixed">Student Name</span><span class="col">Course</span><span class="col">Year</span><span class="col hot">Section</span><span class="col">Grade</span><span class="col">Remarks</span><span class="col hot">Adviser</span><span class="col">Recommendations</span>
+      </div>
+    </a>
+
+    <a class="card" href="v4_unassociated/index.html">
+      <div class="card-head"><span class="tag">V4</span><h2>Unassociated headers</h2></div>
+      <p class="change">Inputs carry no accessible name. Only the header above names them.</p>
+      <p class="tests"><b>Tests:</b> label-cascade fallback (rules 5-6)</p>
+      <div class="cols">
+        <span class="col fixed">Index</span><span class="col fixed">Student ID</span><span class="col fixed">Student Name</span><span class="col hot">Course</span><span class="col hot">Year</span><span class="col hot">Grade</span><span class="col hot">Remarks</span><span class="col hot">Recommendations</span>
+      </div>
+    </a>
+
+    <a class="card" href="v5_near_duplicates/index.html">
+      <div class="card-head"><span class="tag">V5</span><h2>Near-duplicates</h2></div>
+      <p class="change">Look-alike columns sit right next to the real ones.</p>
+      <p class="tests"><b>Tests:</b> abstention</p>
+      <div class="cols">
+        <span class="col fixed">Index</span><span class="col fixed">Student ID</span><span class="col fixed">Student Name</span><span class="col">Course</span><span class="col">Year</span><span class="col hot">Year Enrolled</span><span class="col">Grade</span><span class="col hot">Grade (Recomputed)</span><span class="col">Remarks</span><span class="col">Recommendations</span>
+      </div>
+    </a>
+
+    <a class="card" href="v6a_options/index.html">
+      <div class="card-head"><span class="tag">V6a</span><h2>Options</h2></div>
+      <p class="change">Remarks options become PASSED / FAILED. Scale unchanged.</p>
+      <p class="tests"><b>Tests:</b> option matching (3.8 step 4), isolated</p>
+      <div class="cols">
+        <span class="col fixed">Index</span><span class="col fixed">Student ID</span><span class="col fixed">Student Name</span><span class="col">Course</span><span class="col">Year</span><span class="col">Grade</span><span class="col hot">Remarks: PASSED / FAILED</span><span class="col">Recommendations</span>
+      </div>
+    </a>
+
+    <a class="card" href="v6b_scale/index.html">
+      <div class="card-head"><span class="tag">V6b</span><h2>Inverted scale</h2></div>
+      <p class="change">Grades run 1.00-5.00, lower is better, 3.00 passes. Options unchanged.</p>
+      <p class="tests"><b>Tests:</b> induced operator direction, isolated</p>
+      <div class="cols">
+        <span class="col fixed">Index</span><span class="col fixed">Student ID</span><span class="col fixed">Student Name</span><span class="col">Course</span><span class="col">Year</span><span class="col hot">Grade 1.00-5.00</span><span class="col">Remarks</span><span class="col">Recommendations</span>
+      </div>
+    </a>
+
+  </div>
 </main>
 </body>
 </html>
