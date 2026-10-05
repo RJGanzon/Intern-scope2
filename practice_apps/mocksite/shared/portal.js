@@ -276,7 +276,6 @@
     var next = verdict === null ? "" : (verdict ? opts.pass : opts.fail);
     if (remarks.value === next) return;
     remarks.value = next;
-    if (next) flashCell(remarks, "just-derived");
   }
 
   /* ---- validation ---- */
@@ -344,56 +343,14 @@
     updateCount();
   }
 
-  // Restart a cell's glow. Removing and re-adding the class alone is collapsed
-  // into no change; reading offsetWidth in between makes the browser see both.
-  function flashCell(el, cls) {
-    var td = el.parentNode;
-    td.classList.remove("just-typed", "just-derived");
-    void td.offsetWidth;
-    td.classList.add(cls);
-  }
-
-  // The strip lives along the top of the sheet's panel. Built here rather than
-  // in each variant's HTML so the eight variants stay structurally untouched.
-  function progressStrip() {
-    var strip = document.getElementById("progress-strip");
-    if (strip) return strip;
-    var panel = table().closest(".panel");
-    if (!panel) return null;
-    strip = document.createElement("div");
-    strip.id = "progress-strip";
-    strip.className = "progress-strip";
-    strip.setAttribute("aria-hidden", "true");
-    strip.innerHTML = '<span class="filled"></span><span class="saved"></span>';
-    panel.appendChild(strip);
-    return strip;
-  }
-
-  // "Filled" counts what is on screen, "saved" what is in the record. Encoding
-  // passes save once at the end, so counting saved rows alone would sit at
-  // zero for the whole run and then jump.
   function updateCount() {
-    var total = records.length;
-    var filled = rows.filter(function (_, i) { return isTouched(readRow(i)); }).length;
-    var saved = records.filter(function (r) { return isTouched(r); }).length;
-    var complete = total > 0 && saved === total;
-
-    var strip = progressStrip();
-    if (strip) {
-      strip.querySelector(".filled").style.width = (100 * filled / total) + "%";
-      strip.querySelector(".saved").style.width = (100 * saved / total) + "%";
-      strip.classList.toggle("complete", complete);
-    }
-
     var counter = document.getElementById("roster-count");
     if (!counter) return;
-    counter.innerHTML = "";
-    var num = document.createElement("span");
-    num.className = "count-num" + (complete ? " complete" : "");
-    num.textContent = String(filled);
-    counter.appendChild(num);
-    counter.appendChild(document.createTextNode(
-      " / " + total + " filled · " + saved + " saved"));
+
+    var done = records.filter(function (r) { return isTouched(r); }).length;
+    var unsaved = rows.filter(function (_, i) { return isDirty(i); }).length;
+    counter.textContent = done + " of " + records.length + " encoded" +
+      (unsaved ? " - " + unsaved + " unsaved" : "");
   }
 
   function setStatus(msg, kind) {
@@ -486,7 +443,6 @@
       if (!el.dataset || el.dataset.row === undefined) return;
       var i = Number(el.dataset.row);
       rows[i].classList.remove("just-saved");
-      if (el.value.trim() !== "") flashCell(el, "just-typed");
       if (el.dataset.key === GRADE_KEY) deriveRemarks(i);
       refreshRow(i);
       updateCount();
