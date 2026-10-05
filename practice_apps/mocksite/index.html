@@ -8,6 +8,8 @@
   <!-- Index-only styles. The variants never load this page, so nothing here can
        move a control the agent observes; shared/styles.css stays the sheet's. -->
   <style>
+    /* Four steps only: 28 / 18 / 14 / 11. */
+    h1 { font-size: 28px; letter-spacing: -0.01em; margin-bottom: 8px; }
     .lede { max-width: 760px; }
     .lede strong { color: var(--text); }
 
@@ -38,17 +40,17 @@
 
     .card-head { display: flex; align-items: baseline; gap: 10px; }
     .tag {
-      font: 700 12px/1 "Segoe UI", Arial, sans-serif;
+      font: 700 11px/1 "Segoe UI", Arial, sans-serif;
       color: #fff;
       background: var(--accent);
       border-radius: 4px;
       padding: 4px 7px;
     }
     .card.control .tag { background: var(--muted); }
-    .card h2 { margin: 0; font-size: 16px; }
+    .card h2 { margin: 0; font-size: 18px; }
 
     .change { margin: 0; }
-    .tests { margin: 0; color: var(--muted); font-size: 13px; }
+    .tests { margin: 0; color: var(--muted); }
     .tests b { font-weight: 600; color: var(--text); }
 
     /* The sheet's header row in miniature: what a column is called, in the
@@ -72,7 +74,7 @@
     }
 
     .key { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 16px;
-           color: var(--muted); font-size: 12px; align-items: center; }
+           color: var(--muted); font-size: 11px; align-items: center; }
   </style>
 </head>
 <body>
