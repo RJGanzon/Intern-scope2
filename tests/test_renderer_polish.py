@@ -186,5 +186,12 @@ def test_new_task_button_is_not_offered(page):
     ) == "none"
 
 
+def test_play_panel_has_one_heading_not_two(page):
+    """"PLAY" then "READY TO PLAY": the second was static text nothing ever
+    updated -- it claimed "ready" even with no task loaded. Removed."""
+    assert page.evaluate("document.getElementById('ppReadyLabel')") is None
+    assert "READY TO PLAY" not in page.inner_text("#playPanel").upper()
+
+
 def test_no_page_errors(page):
     assert page.errors == []
