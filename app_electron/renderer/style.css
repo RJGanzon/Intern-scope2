@@ -972,3 +972,14 @@ select.field:disabled { cursor: not-allowed; }
    server" button that renderer.js had already hidden. Same fix as the
    .mid-panel / .pp-capsule / #ppCheckpointGroup pairs above. */
 .btn[hidden] { display: none; }
+
+/* ── Soft type (2026-10-06): Nunito replaces the monospace roles too ──────
+   Every number that used to sit in JetBrains Mono keeps fixed-width digits,
+   so the clock, counters, timers and countdowns do not shift sideways as
+   they tick. Fields go up a step: Nunito at 11.5px read smaller than the
+   mono it replaces. */
+.clock, .rp-stats, .mono-count, .mono-facts dd, .sf-time,
+.pp-countdown-number, .handover-countdown, .pp-detail-stats {
+  font-variant-numeric: tabular-nums;
+}
+.field { font-size: 12.5px; }

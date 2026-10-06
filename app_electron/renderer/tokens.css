@@ -5,23 +5,20 @@
    appears nowhere else in the product. Every other action is near-black
    ink. Do not add new colour roles here without checking that rule first.
 
-   Archivo (headings/UI) + JetBrains Mono (numbers/timestamps/eyebrows) are
-   self-hosted as variable fonts (both SIL OFL) under ./fonts/ -- Google's
-   css2 endpoint serves the same physical woff2 per family regardless of
-   which static weight is requested, so each is declared once here with a
-   font-weight range rather than as separate per-weight files. */
+   Nunito everywhere (2026-10-06, direct request: "change the font to a
+   softer one", picked from a side-by-side of Nunito / Figtree / DM Sans).
+   It replaces both Archivo (UI) and JetBrains Mono (eyebrows, timestamps,
+   status, fields): leaving the mono in place kept the right sidebar
+   reading as a code editor, which was the user's own complaint. Numbers
+   keep tabular figures (font-variant-numeric) so the clock and counters
+   do not jitter without a monospace face. Self-hosted variable woff2,
+   SIL OFL, latin subset, under ./fonts/nunito/. Archivo and JetBrains
+   Mono files stay on disk, undeclared. */
 
 @font-face {
-  font-family: "Archivo";
-  src: url("fonts/archivo/archivo-variable.woff2") format("woff2");
-  font-weight: 400 700;
-  font-style: normal;
-  font-display: swap;
-}
-@font-face {
-  font-family: "JetBrains Mono";
-  src: url("fonts/jetbrains-mono/jetbrains-mono-variable.woff2") format("woff2");
-  font-weight: 400 700;
+  font-family: "Nunito";
+  src: url("fonts/nunito/nunito-variable.woff2") format("woff2");
+  font-weight: 400 800;
   font-style: normal;
   font-display: swap;
 }
@@ -66,8 +63,11 @@
   --handover-eyebrow: #E1795A;
 
   /* type */
-  --font-ui: "Archivo", -apple-system, sans-serif;
-  --font-mono: "JetBrains Mono", Consolas, monospace;
+  --font-ui: "Nunito", -apple-system, "Segoe UI", sans-serif;
+  /* Kept as a token so every existing var(--font-mono) still resolves --
+     now to the same soft face. The "mono" roles (eyebrows, counts,
+     timestamps) keep their size, tracking and tabular numerals. */
+  --font-mono: var(--font-ui);
 
   /* shape */
   --radius-sm: 8px;

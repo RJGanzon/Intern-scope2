@@ -147,5 +147,44 @@ def test_standard_scrollbar_properties_not_used():
     assert not any("scrollbar-width:" in l or "scrollbar-color:" in l for l in rules)
 
 
+# ── soft type, and no "New task" (2026-10-06 direct requests) ───────────────
+
+def test_nunito_actually_loads(page):
+    """A missing or mis-pathed woff2 fails silently to the fallback face."""
+    assert page.evaluate("""async () => {
+        await document.fonts.load('16px Nunito');
+        return document.fonts.check('16px Nunito');
+    }""")
+
+
+@pytest.mark.parametrize("selector", [
+    "body",
+    "#recorderPanel .rp-head h2",   # right sidebar eyebrow, was JetBrains Mono
+    "#recorderPanel .rp-status-text",
+    "#recorderPanel .clock",
+    "#recorderPanel .field",
+])
+def test_right_sidebar_uses_the_soft_face_too(page, selector):
+    """The user's complaint: the sidebar kept its coding font. Every former
+    mono role now resolves to Nunito."""
+    family = page.evaluate(
+        "(s) => getComputedStyle(document.querySelector(s)).fontFamily", selector)
+    assert family.lstrip('"').startswith("Nunito"), family
+
+
+def test_former_mono_numbers_keep_fixed_width_digits(page):
+    assert page.evaluate(
+        "getComputedStyle(document.querySelector('#recorderPanel .clock')).fontVariantNumeric"
+    ) == "tabular-nums"
+
+
+def test_new_task_button_is_not_offered(page):
+    """Requested removed. Hidden rather than deleted: renderer.js binds to it
+    at startup, and a missing element would throw before the rest loads."""
+    assert page.evaluate(
+        "getComputedStyle(document.getElementById('btnCreateWorkflow')).display"
+    ) == "none"
+
+
 def test_no_page_errors(page):
     assert page.errors == []
