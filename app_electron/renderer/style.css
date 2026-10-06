@@ -79,7 +79,9 @@ p { text-wrap: pretty; }
   width: 72px; height: 72px;
   display: flex; align-items: center; justify-content: center;
   margin-bottom: 10px;
-  animation: splashBounceIn .7s cubic-bezier(.34,1.56,.64,1) both,
+  /* Ease-out-expo rise, no overshoot: the mark settles instead of
+     springing past its size. */
+  animation: splashRiseIn .7s cubic-bezier(.16, 1, .3, 1) both,
              splashBob 2.6s ease-in-out 1s infinite;
 }
 .splash-i {
@@ -95,10 +97,9 @@ p { text-wrap: pretty; }
   border-radius: 24px;
   animation: splashGlow 2.6s ease-in-out 1s infinite;
 }
-@keyframes splashBounceIn {
-  0%   { transform: scale(.4); opacity: 0; }
-  60%  { transform: scale(1.08); opacity: 1; }
-  100% { transform: scale(1); opacity: 1; }
+@keyframes splashRiseIn {
+  0%   { transform: scale(.82) translateY(8px); opacity: 0; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
 }
 @keyframes splashBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 @keyframes splashGlow { 0%, 100% { transform: scale(1); opacity: .5; } 50% { transform: scale(1.1); opacity: .1; } }
@@ -855,3 +856,119 @@ textarea.field { resize: vertical; font-family: var(--font-ui); }
 .fillmode-choices::-webkit-scrollbar-thumb {
   background: var(--border-strong); border-radius: 4px;
 }
+
+/* ── Polish pass (2026-10-06) ───────────────────────────────────────────
+   Design only: no markup, copy, colour roles or behaviour change. Same
+   editorial-calm world; clay still means "agent has control" and nothing
+   else; ink is still the only primary. This block finishes what the
+   browser was still drawing for us, and gives surfaces one consistent
+   depth instead of outline-only. ────────────────────────────────────── */
+
+/* Browser surfaces: selection, caret and scrollbars in the app's palette,
+   not Windows defaults. The grey OS scrollbar in Settings was the loudest
+   unthemed thing on screen. ::-webkit-scrollbar only, on purpose: in this
+   Chromium, setting the standard scrollbar-width/-color switches back to
+   the OS-drawn bar (arrows included) and ignores these rules. */
+::selection { background: var(--accent-blue-tint-border); color: var(--ink); }
+input, textarea { caret-color: var(--ink); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid transparent; background-clip: padding-box;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--text-faint); }
+::-webkit-scrollbar-button { display: none; height: 0; }
+
+/* Fields: a drawn chevron instead of the OS arrow, a resting shadow, and a
+   soft ring on focus rather than a bare border swap. */
+.field { box-shadow: var(--shadow-rest); transition: border-color .15s ease, box-shadow .15s ease; }
+.field:focus { box-shadow: var(--focus-ring); }
+.field:disabled { background-color: var(--sunk); color: var(--text-muted); box-shadow: none; }
+select.field {
+  -webkit-appearance: none; appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%2357534E' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px 12px;
+  cursor: pointer;
+}
+select.field:disabled { cursor: not-allowed; }
+
+/* Buttons: a press you can feel, and ghost buttons that sit on the page. */
+.btn { transition: filter .12s ease, background .12s ease, border-color .12s ease, transform .08s ease, box-shadow .15s ease; }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn-ghost { box-shadow: var(--shadow-rest); }
+.btn-ghost:hover:not(:disabled) { filter: none; border-color: var(--ink); }
+.btn-primary { box-shadow: 0 1px 2px rgba(22, 21, 15, .2); }
+
+/* Home: the subtitle broke as "...hand the rest back / to Intern."; one
+   line at this width. Cards get resting depth and a lift on hover. */
+.home-sub { max-width: 56ch; }
+.home-card {
+  border-color: var(--border);
+  box-shadow: var(--shadow-rest);
+  transition: box-shadow .25s var(--ease-out), transform .25s var(--ease-out);
+}
+.home-card:hover { box-shadow: var(--shadow-lift); transform: translateY(-2px); }
+.home-card-num { background: var(--ink); color: var(--app-bg); }
+.home-glossary { background: var(--card); box-shadow: var(--shadow-rest); }
+
+/* Play panel: the loaded task's description was 10.5px with the icon
+   floating at its middle. Readable size, icon pinned to the first line. */
+.pp-slot.filled { border-color: var(--border); box-shadow: var(--shadow-rest); }
+.pp-capsule { align-items: flex-start; }
+.pp-capsule-icon { width: 34px; height: 34px; font-size: 17px; }
+.pp-capsule-text { gap: 3px; padding-top: 1px; }
+.pp-capsule-name { font-size: 13.5px; }
+.pp-capsule-meta {
+  font-size: 11.5px; line-height: 1.5; color: var(--text-secondary);
+  /* Three lines, then an ellipsis: at a readable size the full text no
+     longer fits the panel, and the whole description is one click away
+     under the task's info button (.pp-details). */
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+/* The panel is a column with overflow hidden; without this the slot was
+   the thing that shrank when content got taller. */
+.pp-slot { flex: none; }
+.pp-details, .rp-status { box-shadow: var(--shadow-rest); }
+.pp-warning { box-shadow: 0 1px 2px rgba(180, 68, 30, .06); }
+
+/* Task chips: the chip silhouette stays exactly as designed (a mask, so no
+   outer shadow can follow it). Smoother lift, and a faint top-light so the
+   ink reads as a surface rather than a hole in the page. */
+.task-chip {
+  background-image: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0) 45%);
+  transition: transform .25s var(--ease-out), filter .2s ease, background-color .2s ease;
+}
+.task-chip:hover { transform: translateY(-3px); }
+.task-chip-emoji { box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+
+/* Settings: the LM Studio status line was body-size between 11-12px
+   labels. Same voice as the hints around it. Option cards get depth. */
+#lmStudioServerLabel { font-size: 12.5px; color: var(--text-secondary); }
+.vision-option {
+  background: var(--card);
+  border-color: var(--border);
+  box-shadow: var(--shadow-rest);
+  transition: border-color .15s ease, background .15s ease, box-shadow .2s var(--ease-out);
+}
+.vision-option:hover { box-shadow: var(--shadow-lift); }
+
+/* Activity feed rows and the finished summary share the same resting depth. */
+.step-feed-item { box-shadow: var(--shadow-rest); }
+
+@media (prefers-reduced-motion: reduce) {
+  .home-card, .task-chip, .btn, .vision-option { transition: none; }
+  .home-card:hover, .task-chip:hover { transform: none; }
+}
+
+/* .btn's display:inline-flex is an author rule, so it beat the browser's
+   [hidden]{display:none} and every button the renderer hid stayed on
+   screen -- found in this pass as "Server running" next to a "Start
+   server" button that renderer.js had already hidden. Same fix as the
+   .mid-panel / .pp-capsule / #ppCheckpointGroup pairs above. */
+.btn[hidden] { display: none; }
