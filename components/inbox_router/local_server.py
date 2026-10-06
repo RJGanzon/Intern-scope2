@@ -17,7 +17,8 @@ from __future__ import annotations
 import json
 import os
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Tuple
 from urllib.parse import urlsplit
 
@@ -179,6 +180,11 @@ def handle_request(method: str, path: str, body: bytes, router: InboxRouter, ori
         payload = json.dumps({"pending": router.pending_entries()}).encode("utf-8")
         return 200, {}, payload, "application/json"
 
+    if method == "GET" and path == "/api/mode/progress":
+        # Read-only, and answered outside the router lock (see make_handler),
+        # so a run can show "re-deciding 12/30" while /api/mode is busy.
+        return 200, {}, json.dumps(router.redecide_progress()).encode("utf-8"), "application/json"
+
     if method == "POST" and path == "/api/mode":
         # How decisions are reached -- habits / hybrid / reasoning -- chosen at
         # Play and sent here by automate_inbox.py before it refreshes the
@@ -315,7 +321,19 @@ def handle_request(method: str, path: str, body: bytes, router: InboxRouter, ori
     return 404, {}, json.dumps({"error": "Not found"}).encode("utf-8"), "application/json"
 
 
+# Paths answered without taking the router lock: static files (so "is the
+# server up?" gets an answer while a slow LLM pass runs -- Electron and
+# automate_inbox both probe "/" and, getting no reply from a busy
+# single-threaded server, used to start a second and third copy) and the
+# read-only re-decide progress.
+_LOCK_FREE_GET = set(_STATIC_FILES) | {"/api/mode/progress"}
+
+
 def make_handler(router: InboxRouter, cold_email_sender=None, checks_service=None):
+    # The server is threaded so it never stops answering; everything that
+    # touches router/mailbox state still runs one request at a time.
+    state_lock = threading.Lock()
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
             pass  # keep stdout quiet -- this is a background helper process
@@ -329,9 +347,15 @@ def make_handler(router: InboxRouter, cold_email_sender=None, checks_service=Non
             self._respond("POST", self.path, body, self.headers.get("Origin"))
 
         def _respond(self, method, path, body, origin=None):
-            status, headers, payload, content_type = handle_request(
-                method, path, body, router, origin=origin, cold_email_sender=cold_email_sender,
-                checks_service=checks_service)
+            def handle():
+                return handle_request(
+                    method, path, body, router, origin=origin, cold_email_sender=cold_email_sender,
+                    checks_service=checks_service)
+            if method == "GET" and path in _LOCK_FREE_GET:
+                status, headers, payload, content_type = handle()
+            else:
+                with state_lock:
+                    status, headers, payload, content_type = handle()
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             for k, v in headers.items():
@@ -350,7 +374,7 @@ def serve(port: int = DEFAULT_PORT) -> None:
     # actually answer yet. The real handler class is installed once ready,
     # before serve_forever() starts processing any request.
     try:
-        httpd = HTTPServer(("127.0.0.1", port), BaseHTTPRequestHandler)
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), BaseHTTPRequestHandler)
     except OSError as exc:
         print(f"Could not start local server on port {port} (already running?): {exc}")
         return

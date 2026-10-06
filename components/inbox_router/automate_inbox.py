@@ -31,6 +31,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -170,9 +171,25 @@ MODE_LABELS = {
 }
 
 
-def set_decision_mode(mode: str) -> int:
+def _redecide_progress() -> dict | None:
+    """The server's {"done", "total", "active"} for the running mode switch,
+    or None when it can't say (an older server, or a hiccup)."""
+    try:
+        with urllib.request.urlopen(SERVER_URL + "api/mode/progress", timeout=2) as resp:
+            return json.loads(resp.read() or b"{}")
+    except Exception:
+        return None
+
+
+def set_decision_mode(mode: str, poll_s: float = 1.0) -> int:
     """Tell the inbox server how to decide, and have it re-decide every email
-    still pending under that mode. Returns how many were re-decided.
+    still pending that was decided some other way. Returns how many were
+    re-decided.
+
+    The request can take a while -- each re-decided email may be an LLM
+    call -- so it runs on a worker thread while this one polls the server's
+    progress and prints "re-deciding N/M" as it moves. Before, the run sat
+    silently on "deciding ..." for a minute or more and read as a hang.
 
     A server left running from before decision modes existed has no
     /api/mode endpoint; that is reported plainly rather than letting the run
@@ -180,15 +197,35 @@ def set_decision_mode(mode: str) -> int:
     req = urllib.request.Request(
         SERVER_URL + "api/mode", data=json.dumps({"mode": mode}).encode("utf-8"),
         headers={"Content-Type": "application/json"}, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            return int(json.loads(resp.read() or b"{}").get("redecided", 0))
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            raise SystemExit(
-                "The inbox server running on 127.0.0.1:8765 predates decision modes. "
-                "Close it (or restart the Intern app) and press Play again.")
-        raise
+    outcome: dict = {}
+
+    def _post():
+        try:
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                outcome["redecided"] = int(json.loads(resp.read() or b"{}").get("redecided", 0))
+        except BaseException as exc:          # re-raised on the calling thread
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=_post, daemon=True)
+    worker.start()
+    shown = None
+    while worker.is_alive():
+        worker.join(poll_s)
+        progress = _redecide_progress() if worker.is_alive() else None
+        if progress and progress.get("active") and progress.get("total"):
+            line = f"  re-deciding  {progress.get('done', 0)}/{progress['total']} emails"
+            if line != shown:
+                _flush_safe_print(line)
+                shown = line
+
+    error = outcome.get("error")
+    if isinstance(error, urllib.error.HTTPError) and error.code == 404:
+        raise SystemExit(
+            "The inbox server running on 127.0.0.1:8765 predates decision modes. "
+            "Close it (or restart the Intern app) and press Play again.")
+    if error is not None:
+        raise error
+    return outcome.get("redecided", 0)
 
 
 # Decisions that need real human-typed content (a reply, a forward, a

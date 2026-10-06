@@ -185,6 +185,9 @@ class InboxRouter:
             "body_text": message.body_text,
             "decision": decision, "capsule_name": capsule_name, "confidence": confidence,
             "rationale": rationale, "layer": layer, "forward_to": forward_to,
+            # Which decision mode produced this row, so a later mode switch
+            # can tell which pending emails are already decided its way.
+            "mode": self._agent.mode,
             "status": "pending", "draft_id": "",
             "routed_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -367,7 +370,7 @@ class InboxRouter:
 
     def set_decision_mode(self, mode: str) -> int:
         """Switch how decisions are reached (see inbox_agent.DECISION_MODES)
-        and re-decide every email still pending under the new mode.
+        and re-decide every pending email not already decided this way.
 
         Decisions are made once per email and saved, so without the
         re-decide step a mode chosen at Play would only ever apply to mail
@@ -375,18 +378,38 @@ class InboxRouter:
         answers. History is append-only and pending_entries() keeps only
         the newest row per message, so each re-decided email simply gains a
         newer pending row; nothing already confirmed is touched. Returns how
-        many emails were re-decided."""
+        many emails were re-decided.
+
+        Only rows decided under a different mode -- or with no mode recorded,
+        i.e. saved before rows carried one -- are redone. Play always sends
+        a mode, usually the default it already runs in, and re-deciding all
+        30 emails then cost ~30 sequential LLM calls (a minute or more of
+        silence that read as a hang) to arrive at the answers already on
+        screen. Progress is published through redecide_progress() so the
+        run can show it while this blocks."""
         self._agent.mode = mode          # validates; raises on an unknown mode
+        stale = [e for e in self.pending_entries() if e.get("mode") != mode]
+        self._redecide_progress = {"mode": mode, "done": 0, "total": len(stale), "active": True}
         redecided = 0
-        for entry in self.pending_entries():
-            message = self._gmail.get_message(entry["message_id"])
-            if message is None:
-                continue
-            self._classify_and_record(message)
-            redecided += 1
+        try:
+            for entry in stale:
+                message = self._gmail.get_message(entry["message_id"])
+                if message is not None:
+                    self._classify_and_record(message)
+                    redecided += 1
+                self._redecide_progress["done"] += 1
+        finally:
+            self._redecide_progress["active"] = False
         emit("inbox_log", line=f"Decision mode set to {mode!r}; re-decided {redecided} pending email(s).",
              level="info")
         return redecided
+
+    def redecide_progress(self) -> dict:
+        """How far the current (or last) set_decision_mode() has got:
+        {"mode", "done", "total", "active"}. A copy, safe to read from
+        another thread while the re-decide loop runs."""
+        return dict(getattr(self, "_redecide_progress",
+                            {"mode": self._agent.mode, "done": 0, "total": 0, "active": False}))
 
     def pending_entries(self) -> list:
         """Every history entry still awaiting a Confirm/Override -- exposed

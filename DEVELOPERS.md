@@ -813,6 +813,12 @@ is NOT gated on Action-Space (Big Three #2) or Control-Flow (Big Three
 #3)** — it's a legitimate alternative that unblocks Scope #3 rather than
 waiting on them.
 
+- [x] `scope3_play_no_silent_redecide` — **2026-10-06, direct report** ("why is it stuck at deciding Habits + reasoning ... and starting"). Not frozen. Three causes, read from `logs/capsule_activity.log`, `logs/inbox_server.log` and the process list:
+  1. **Play re-decided every pending email, even when the mode hadn't changed.** `set_decision_mode()` redid all 30, and with the trained model confident on 1 of 30, that was ~29 sequential LLM calls (about a minute or more) before `/api/mode` answered, with nothing printed meanwhile. **Decision:** every routed row now records the `mode` that produced it; a switch re-decides only rows from a different mode or with none recorded (pre-change data). Normal Play in the default mode re-decides nothing.
+  2. **Three inbox servers were running.** `HTTPServer` is single-threaded, so while it was busy the "is it up?" probes on `/` (Electron's `ensureLocalServerRunning`, `automate_inbox.ensure_server_running`) got no reply and started another copy, and the copies competed for LM Studio. **Decision:** `ThreadingHTTPServer`, with every state-touching request serialised behind one lock in `make_handler`; static files and the new read-only `GET /api/mode/progress` bypass the lock. The router state stays single-writer, and the server never stops answering.
+  3. **No progress shown.** **Decision:** `automate_inbox.set_decision_mode()` (also used by `run_boss_task_list.py`) runs the POST on a worker thread and polls `/api/mode/progress`, printing `re-deciding N/M emails`. An old server without the endpoint is still reported, not ignored.
+  Verified on the real inbox data (dry run, headless, `--no-pointer`): the first run after the change re-decided the 30 legacy rows once with live progress (97s); the second started straight away (20s including the 5s countdown and browser launch), with no duplicate servers left behind. Not covered: the model is still unconfident on this inbox, so a real mode *switch* still costs LLM time. That's a data problem (more Practice Inbox examples, then retrain), not a code one.
+  *(Guards: `tests/test_inbox_decision_modes.py` +8, 7 of which fail on the old code; Scope #3 suite 218 passed.)*
 - [x] `scope3_gmail_api_triage` — Inbox Router: Gmail API + OAuth2 + a
   locally-learned pattern profile, rules+LLM hybrid classification,
   draft-only confirm-to-act UI, calls into Scope #1/#2's existing capsule

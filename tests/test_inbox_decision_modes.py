@@ -290,3 +290,121 @@ def test_play_dialog_offers_the_three_modes():
     block = block[:block.index("\n  },\n")]
     assert re.findall(r'name: "([^"]+)"', block) == ["Habits only", "Habits + reasoning", "Reasoning only"]
     assert re.findall(r'args: \["--mode", "([a-z]+)"\]', block) == ["habits", "hybrid", "reasoning"]
+
+
+# ==========================================================================
+# Play no longer hangs on "deciding ..." (2026-10-06, direct report)
+#
+# Pressing Play sent the mode -- usually the default it already ran in --
+# and the server re-decided all 30 pending emails, ~30 sequential LLM calls,
+# before answering. Silent for a minute or more; meanwhile the single-
+# threaded server could not answer "are you up?", so Electron and the run
+# script each started another copy (three were found running).
+# ==========================================================================
+
+def test_every_decision_records_the_mode_that_made_it(tmp_path):
+    router = _router(tmp_path)
+    router.poll_once()
+    assert {e.get("mode") for e in router.pending_entries()} == {"hybrid"}
+
+
+def test_setting_the_mode_it_already_runs_in_redecides_nothing(tmp_path, monkeypatch):
+    router = _router(tmp_path)
+    router.poll_once()
+    calls = []
+    monkeypatch.setattr(router, "_classify_and_record", lambda m: calls.append(m.id))
+    assert router.set_decision_mode("hybrid") == 0
+    assert calls == []
+
+
+def test_a_real_switch_still_redecides_and_switching_back_does_too(tmp_path):
+    router = _router(tmp_path)
+    router.poll_once()
+    assert router.set_decision_mode("habits") == 2
+    assert router.set_decision_mode("habits") == 0
+    assert router.set_decision_mode("hybrid") == 2
+
+
+def test_rows_saved_before_modes_were_recorded_are_redecided(tmp_path):
+    router = _router(tmp_path)
+    router.poll_once()
+    path = tmp_path / "data" / "routed_history.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    rows = raw["messages"] if isinstance(raw, dict) else raw
+    for row in rows:
+        row.pop("mode", None)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    assert router.set_decision_mode("hybrid") == 2
+
+
+def test_progress_is_reported_and_served(tmp_path):
+    import local_server as ls
+    router = _router(tmp_path)
+    router.poll_once()
+    router.set_decision_mode("habits")
+    expected = {"mode": "habits", "done": 2, "total": 2, "active": False}
+    assert router.redecide_progress() == expected
+    status, _, body, _ = ls.handle_request("GET", "/api/mode/progress", b"", router)
+    assert status == 200 and json.loads(body) == expected
+
+
+def test_server_still_answers_while_a_mode_switch_is_busy(tmp_path):
+    """The duplicate-server root cause: a busy server must still answer the
+    "is it up?" probe on "/" and the progress question."""
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    import local_server as ls
+
+    router = _router(tmp_path)
+    router.poll_once()
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_switch(mode):
+        entered.set()
+        release.wait(10)
+        return 0
+
+    router.set_decision_mode = slow_switch
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), ls.make_handler(router))
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    busy = threading.Thread(target=lambda: urllib.request.urlopen(urllib.request.Request(
+        base + "/api/mode", data=b'{"mode": "habits"}', method="POST",
+        headers={"Content-Type": "application/json"}), timeout=15).read(), daemon=True)
+    try:
+        busy.start()
+        assert entered.wait(5), "the mode switch never started"
+        with urllib.request.urlopen(base + "/", timeout=2) as resp:
+            assert resp.status == 200
+        with urllib.request.urlopen(base + "/api/mode/progress", timeout=2) as resp:
+            assert resp.status == 200
+    finally:
+        release.set()
+        busy.join(5)
+        httpd.shutdown()
+
+
+def test_serve_uses_a_threaded_server():
+    src = open(os.path.join(INBOX, "local_server.py"), encoding="utf8").read()
+    assert "ThreadingHTTPServer((\"127.0.0.1\", port)" in src
+
+
+def test_run_prints_redecide_progress_while_it_waits(monkeypatch, capsys):
+    import io
+    import time as _time
+    import automate_inbox
+
+    class _Resp(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=None):
+        url = req if isinstance(req, str) else req.full_url
+        if url.endswith("api/mode/progress"):
+            return _Resp(b'{"mode": "hybrid", "done": 1, "total": 3, "active": true}')
+        _time.sleep(0.4)                      # the slow re-decide
+        return _Resp(b'{"ok": true, "redecided": 3}')
+
+    monkeypatch.setattr(automate_inbox.urllib.request, "urlopen", fake_urlopen)
+    assert automate_inbox.set_decision_mode("hybrid", poll_s=0.05) == 3
+    assert "re-deciding  1/3 emails" in capsys.readouterr().out
