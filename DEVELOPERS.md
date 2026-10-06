@@ -782,6 +782,9 @@ perception.
 
   TESTS: tests/scope2/test_fallback.py, 36 tests -- lookup (exact, unique loose, ambiguous, rival/decoy regression, conflicts, alignment columns excluded), candidate filtering, the no-answer invariant, strict answer parsing (FINAL never read out of FINAL GRADE), LLM refusal/conflict/unavailable paths, the real client degrading on a dead port, and an E2E lock that the matcher's V0 decisions are unchanged. 255 passing, 1 skipped (the live-LLM test).
 
+- [x] `scope2_sheet_opens_at_top` — **2026-10-06, direct report** ("when I launch test tools on Sheet-to-Portal Matcher the Excel is at the bottommost, change that to the topmost scroll"). Root cause: a workbook stores each tab's scroll position and selection, and `make_sheets.py` builds `grade_sheet.xlsx` by copying a template whose view came along — SUMMARY, the tab Excel opens on, had `topLeftCell="A65"` (past the last student); other tabs had stray selections (D19, G18, F19…). **Decision:** fix at the source and in the data. `make_sheets.reset_views()` sets every tab to A1 before both saves (panes untouched, so a frozen header would survive); the two committed workbooks had only their `<sheetView>` XML rewritten — every other zip entry copied byte-for-byte, and the swap refused unless all cell values matched. The active tab stays SUMMARY.
+  *(Guards: `tests/scope2/test_sheet_views.py` — 6; full `tests/scope2` 253 passed.)*
+
 ---
 
 ### Scope #3 — Email / Ticket Triage

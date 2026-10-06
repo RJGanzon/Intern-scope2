@@ -191,6 +191,24 @@ def unprotect(wb):
         ws.protection.selectUnlockedCells = False
 
 
+def reset_views(wb):
+    """Open every tab at the top-left, with A1 selected.
+
+    A workbook remembers its scroll position and selection, and copying the
+    template carried the template's over: SUMMARY opened with row 65 at the
+    top - the bottom of the roster - so "Launch Test Tools" showed an empty
+    tail of the sheet instead of its header. Set on every save so a
+    regenerated sheet can never inherit one again.
+    Panes are left alone, so a frozen header row would survive.
+    """
+    for ws in wb.worksheets:
+        view = ws.sheet_view
+        view.topLeftCell = "A1"
+        for sel in view.selection:
+            sel.activeCell = "A1"
+            sel.sqref = "A1"
+
+
 def build(template, out_path, rng):
     shutil.copy(template, out_path)
     wb = openpyxl.load_workbook(out_path)
@@ -298,6 +316,7 @@ def build(template, out_path, rng):
         sm.cell(r, SUM_COL_FINAL_GRADE).value = final_grade
         s["final_grade"] = final_grade
 
+    reset_views(wb)
     wb.save(out_path)
     return students
 
@@ -317,6 +336,7 @@ def add_status_column(src, dst):
         if grade is None:
             break
         sm.cell(r, col).value = "PASSED" if grade >= 75 else "FAILED"
+    reset_views(wb)
     wb.save(dst)
 
 
